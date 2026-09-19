@@ -228,6 +228,8 @@ CONTENT_WORTHY_TYPES = ("anomaly", "ranking", "geo_signal", "change",
 
 UKPRODUCTS_CSV = Path("/home/ubuntu/datagarden/canonical/ukproducts/2026-09-19.jsonl")
 ASHE_JSONL = Path("/home/ubuntu/datagarden/canonical/ukgraph/ashe_earnings.jsonl")
+HPI_CSV = Path("/home/ubuntu/datagarden/data/uk_hpi/uk_hpi_full.csv")
+PAINFUL_TASKS_PY = Path("/home/ubuntu/datagarden/uk_boring/workflows/painful_tasks.py")
 
 POW_COINS_PY = Path("/home/ubuntu/powpowpow/coins.py")
 POW_CATS_PY = Path("/home/ubuntu/powpowpow/categories.py")
@@ -417,9 +419,13 @@ def signals_top(garden="powpowpow", limit=10):
         res = _products_signals(limit)
     elif garden in ("ashe", "wages"):
         res = _ashe_signals(limit)
+    elif garden in ("hpi", "house", "housing"):
+        res = _hpi_signals(limit)
+    elif garden in ("boring", "ukboring", "admin"):
+        res = _boring_signals(limit)
     else:
         return {"status": "error",
-                "reason": f"Unknown garden '{garden}'. Use powpowpow | ukgraph | ukproducts | ashe."}
+                "reason": f"Unknown garden '{garden}'. Use powpowpow | ukgraph | ukproducts | ashe | hpi | boring."}
     if res.get("status") == "ok":
         for s in res["signals"]:
             s["score"], s["eligible"] = _score_signal(s)
@@ -507,9 +513,104 @@ def _ashe_signals(limit):
     }][:limit]}
 
 
+def _hpi_signals(limit):
+    if not HPI_CSV.exists():
+        return {"status": "UNAVAILABLE", "reason": "hpi csv missing"}
+    import csv
+    rows = list(csv.DictReader(open(HPI_CSV)))
+    rows = [r for r in rows if r.get("Name") == "United Kingdom" and r.get("Period")]
+    if not rows:
+        return {"status": "UNAVAILABLE", "reason": "no UK rows"}
+    latest = max(rows, key=lambda r: r["Period"])
+    types = ["All property types", "Detached houses", "Semi-detached houses",
+             "Terraced houses", "Flats and maisonettes", "New build"]
+    vals = []
+    for t in types:
+        try:
+            y = float((latest.get(f"Percentage change (yearly) {t}") or "").strip() or "nan")
+            p = latest.get(f"Average price {t}", "").strip().replace(",", "")
+            price = float(p) if p else None
+        except ValueError:
+            continue
+        if y == y and price:
+            vals.append((y, t, price))
+    if not vals:
+        return {"status": "UNAVAILABLE", "reason": "no priced rows"}
+    vals.sort(reverse=True)
+    spread = vals[0][0] - vals[-1][0]
+    return {"status": "ok", "signals": [{
+        "id": sig_id("hpi", "divergence", latest["Period"]),
+        "type": "comparison",
+        "title": (f"UK house prices split: {vals[0][1]} {vals[0][0]:+.1f}% YoY vs "
+                  f"{vals[-1][1]} {vals[-1][0]:+.1f}% ({latest['Period']})"),
+        "claim": ("Yearly change by type: " + "; ".join(
+            f"{t} {y:+.1f}% (£{p:,.0f})" for y, t, p in vals) + "."),
+        "why": "Type divergence shows which segments still move and which stall.",
+        "entities": ["house prices", "uk", latest["Period"]],
+        "metrics": [{"name": "yoy_change_pct", "value": round(y, 1), "unit": "%"}
+                    for y, t, p in vals[:4]],
+        "evidence": [{"file": str(HPI_CSV), "period": latest["Period"]}],
+        "timespan": "12m",
+        "confidence": 0.85,
+        "updated_at": utcnow(),
+    }][:limit]}
+
+
+def _boring_signals(limit):
+    if not PAINFUL_TASKS_PY.exists():
+        return {"status": "UNAVAILABLE", "reason": "painful tasks missing"}
+    import importlib.util
+    import re
+    spec = importlib.util.spec_from_file_location("painful", str(PAINFUL_TASKS_PY))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    tasks = [v for k, v in vars(mod).items()
+             if type(v).__name__ == "PainfulTask"]
+    if not tasks:
+        return {"status": "UNAVAILABLE", "reason": "no tasks defined"}
+
+    def gbp(s):
+        m = re.search(r"£([\d.]+)", s or "")
+        return float(m.group(1)) if m else None
+
+    def days(s):
+        m = re.findall(r"(\d+)\s*weeks?", s or "")
+        return max(map(int, m)) * 7 if m else None
+
+    ranked = []
+    for t in tasks:
+        c, d = gbp(t.cost), days(t.timeline)
+        if c is None and d is None:
+            continue
+        ranked.append((d or 0, c or 0, t))
+    if not ranked:
+        return {"status": "UNAVAILABLE", "reason": "no parseable penalties"}
+    ranked.sort(reverse=True)
+    top = ranked[:4]
+    champ = top[0][2]
+    champ_days, champ_cost = top[0][0], top[0][1]
+    return {"status": "ok", "signals": [{
+        "id": sig_id("boring", "penalties"),
+        "type": "ranking",
+        "title": f"UK admin that punishes delay hardest: {champ.name}",
+        "claim": ("Worst delay penalties: " + "; ".join(
+            f"{t.name}: {t.cost} ({t.timeline})" for _, _, t in top) + "."),
+        "why": "Slow admin has a price; doing it late costs more than doing it now.",
+        "entities": ["uk admin", "delay"],
+        "metrics": ([{"name": "timeline_days", "value": champ_days, "unit": "days"}]
+                    if champ_days else [])
+        + [{"name": "cost_gbp", "value": c, "unit": "GBP"} for _, c, _ in top if c],
+        "evidence": [{"file": str(PAINFUL_TASKS_PY),
+                      "workflow_ids": [t.workflow_id for _, _, t in top]}],
+        "timespan": "evergreen",
+        "confidence": 0.7,
+        "updated_at": utcnow(),
+    }][:limit]}
+
+
 def _all_signals():
     out = []
-    for garden in ("powpowpow", "ukgraph", "ukproducts", "ashe"):
+    for garden in ("powpowpow", "ukgraph", "ukproducts", "ashe", "hpi", "boring"):
         r = signals_top(garden, 25)
         if r.get("status") == "ok":
             for s in r["signals"]:
