@@ -71,6 +71,16 @@ Sanity gates are load-bearing: expansion caught KAS rig figures at
 $3.3B/day in the source cards — absurd rigs are excluded with notes,
 not rendered.
 
+## Jev selection layer (`docs/jev-signal-router-spec.md`)
+
+`route_signal` / `rank_signals`: provider-neutral Jev verdicts
+(interest / frame / monetary / template) over deterministic candidates.
+OpenRouter Decisions endpoint now (`typesafe/jev-1.13`), TypeSafe direct
+later — one interface, origin always reported. No key configured, so the
+MCP runs deterministic fallback honestly marked; 401 path tested to fall
+back cleanly. Reference repos cloned: `jev-ultrafast`,
+`typesafe-jev-examples`, `typesafe-ai-playground`, both awesome lists.
+
 ```bash
 python3 mcp_server.py --serve   # MCP stdio for agents
 ```

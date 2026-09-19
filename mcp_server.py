@@ -516,10 +516,205 @@ def render_narration(content_id=None, voice="en-US-AndrewMultilingualNeural"):
 # STATUS + LINEAGE
 # ============================================================
 
+JEV_OPENROUTER_URL = "https://openrouter.ai/api/alpha/decisions"
+JEV_OPENROUTER_MODEL = "typesafe/jev-1.13"
+JEV_TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_TYPESAFE_MODEL = "jev-latest"
+JEV_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+FRAME_CHOICES = ("job_stress", "retraining", "opportunity", "geographic", "ignore")
+TEMPLATE_CHOICES = ("anomaly", "ranking", "vs", "what_changed", "map", "why",
+                    "opportunity", "ignore")
+
+
+def _jev_provider():
+    if os.environ.get("TYPESAFE_API_KEY"):
+        return {"name": "typesafe", "endpoint": JEV_TYPESAFE_URL,
+                "model": JEV_TYPESAFE_MODEL, "key": os.environ["TYPESAFE_API_KEY"]}
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return {"name": "openrouter", "endpoint": JEV_OPENROUTER_URL,
+                "model": JEV_OPENROUTER_MODEL, "key": os.environ["OPENROUTER_API_KEY"]}
+    return None
+
+
+def _router_questions(signal):
+    ents = ", ".join(signal.get("entities", [])[:3])
+    return {
+        "interest": {
+            "type": "score",
+            "instructions": ("How materially interesting is this signal as a 20-second "
+                             "evidence-driven video? 0 = routine graph update, "
+                             "10 = must-cover economic change."),
+            "min": 0, "max": 10,
+        },
+        "frame": {
+            "type": "choice",
+            "instructions": f"Which framing fits this signal about {ents}?",
+            "criteria": {
+                "job_stress": "occupation under pressure or displacement",
+                "retraining": "implies a move someone should make",
+                "opportunity": "actionable way to earn or save",
+                "geographic": "place disparity is the story",
+                "ignore": "not worth covering",
+            },
+        },
+        "monetary": {
+            "type": "noul",
+            "instructions": "Is there an actionable monetary implication for a viewer?",
+        },
+        "template": {
+            "type": "choice",
+            "instructions": "Which render template fits?",
+            "criteria": {t: t for t in TEMPLATE_CHOICES},
+        },
+    }
+
+
+def _jev_ask(state, questions):
+    """POST state+questions to the configured Jev provider (stdlib only)."""
+    import time
+    import urllib.error
+    import urllib.request
+    prov = _jev_provider()
+    payload = {"model": prov["model"], "state": state, "questions": questions}
+    body = json.dumps(payload).encode()
+    last_err = "unknown"
+    for attempt in range(3):
+        req = urllib.request.Request(
+            prov["endpoint"], data=body,
+            headers={"Authorization": f"Bearer {prov['key']}",
+                     "Content-Type": "application/json",
+                     "HTTP-Referer": "https://github.com/prx0r/content",
+                     "X-Title": "content-sensor"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return {"status": "ok", "origin": f"jev:{prov['name']}",
+                        "answers": json.loads(resp.read().decode())}
+        except urllib.error.HTTPError as e:
+            last_err = f"HTTP {e.code}: {e.read().decode()[:300]}"
+            if e.code not in JEV_RETRY_STATUSES:
+                break
+        except OSError as e:
+            last_err = f"network: {e}"
+        time.sleep(0.5 * (2 ** attempt))
+    return {"status": "error", "origin": f"jev:{prov['name']}",
+            "reason": f"provider failed: {last_err}"}
+
+
+def _deterministic_verdict(signal):
+    score = signal.get("score", 0.5) or 0.5
+    frame = {"anomaly": "job_stress", "ranking": "opportunity",
+             "geo_signal": "geographic", "change": "job_stress",
+             "comparison": "opportunity", "causal": "retraining"}.get(
+                 signal.get("type"), "ignore")
+    text = json.dumps(signal).lower()
+    monetary = any(k in text for k in ("gbp", "usd", "wage", "value", "profit", "earn", "cost"))
+    return {"interest": round(score * 10, 1), "frame": frame,
+            "monetary": monetary,
+            "template": TEMPLATE_FOR_TYPE.get(signal.get("type"), "anomaly"),
+            "probabilities": None}
+
+
+def _parse_jev_answers(raw):
+    """Defensively extract verdict fields from a System One response body."""
+    out = {"interest": None, "frame": None, "monetary": None,
+           "template": None, "probabilities": {}}
+    if not isinstance(raw, dict):
+        return out
+    scores = raw.get("scores", {}) or {}
+    if isinstance(scores.get("interest"), dict):
+        out["interest"] = scores["interest"].get("score")
+    elif isinstance(scores.get("interest"), (int, float)):
+        out["interest"] = scores["interest"]
+    choices = raw.get("choices", {}) or {}
+    for key in ("frame", "template"):
+        c = choices.get(key)
+        if isinstance(c, dict):
+            out["frame" if key == "frame" else "template"] = c.get("choice")
+            if c.get("probabilities"):
+                out["probabilities"][key] = c["probabilities"]
+        elif isinstance(c, str):
+            out[key] = c
+    nouls = raw.get("nouls", {}) or {}
+    m = nouls.get("monetary")
+    if isinstance(m, dict):
+        out["monetary"] = m.get("noul")
+        if out["monetary"] is None and m.get("probability") is not None:
+            out["monetary"] = m["probability"] > 0.5
+    elif isinstance(m, bool):
+        out["monetary"] = m
+    return out
+
+
+def route_signal(signal_id=None):
+    """Jev verdict on one signal: interest, frame, monetary, template.
+
+    Origin is always reported: live Jev when a provider key is configured,
+    deterministic fallback otherwise. Jev chooses; code executes.
+    """
+    if not signal_id:
+        return {"status": "error", "reason": "Pass signal_id from signals_top."}
+    seed = next((s for s in _all_signals() if s["id"] == signal_id), None)
+    if not seed:
+        return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
+    questions = _router_questions(seed)
+    if _jev_provider() is None:
+        verdict = _deterministic_verdict(seed)
+        return {"status": "ok", "signal_id": signal_id, "origin": "deterministic",
+                "note": "No JEV provider key (OPENROUTER_API_KEY/TYPESAFE_API_KEY).",
+                "verdict": verdict}
+    res = _jev_ask(seed, questions)
+    if res["status"] != "ok":
+        verdict = _deterministic_verdict(seed)
+        verdict["provider_error"] = res["reason"]
+        return {"status": "ok", "signal_id": signal_id, "origin": "deterministic",
+                "note": "Provider failed; fell back.", "verdict": verdict}
+    verdict = _parse_jev_answers(res["answers"])
+    if verdict["template"] is None or verdict["template"] not in TEMPLATES:
+        verdict["template"] = TEMPLATE_FOR_TYPE.get(seed.get("type"), "anomaly")
+    if verdict["frame"] is None or verdict["frame"] not in FRAME_CHOICES:
+        verdict["frame"] = _deterministic_verdict(seed)["frame"]
+    return {"status": "ok", "signal_id": signal_id, "origin": res["origin"],
+            "verdict": verdict, "raw": res["answers"]}
+
+
+def rank_signals(garden="powpowpow", limit=10):
+    """Top signals ranked by Jev interest (or deterministic score)."""
+    try:
+        limit = max(1, min(int(limit), 10))
+    except (TypeError, ValueError):
+        limit = 10
+    res = signals_top(garden, 25)
+    if res.get("status") != "ok":
+        return res
+    ranked = []
+    for s in res["signals"]:
+        if not s.get("eligible"):
+            continue
+        r = route_signal(s["id"])
+        v = r.get("verdict", {})
+        ranked.append({"signal": s, "origin": r.get("origin", "deterministic"),
+                       "interest": v.get("interest"),
+                       "frame": v.get("frame"), "template": v.get("template")})
+        if len(ranked) >= limit:
+            break
+    ranked.sort(key=lambda e: (e["interest"] is not None, e["interest"] or 0),
+                reverse=True)
+    origins = {e["origin"] for e in ranked}
+    return {"status": "ok", "garden": garden,
+            "origin": origins.pop() if len(origins) == 1 else "mixed",
+            "ranked": ranked}
+
+
 def content_status():
     """What can this factory actually do right now (truth contract)."""
+    prov = _jev_provider()
     return {
         "status": "ok",
+        "jev": {"provider": prov["name"] if prov else None,
+                "model": prov["model"] if prov else None,
+                "mode": "live" if prov else "deterministic-fallback"},
         "renderers": {
             "hyperframes": bool(shutil.which("npx")),
             "ffmpeg": bool(shutil.which("ffmpeg")),
@@ -588,6 +783,17 @@ TOOLS = [
                      "properties": {"content_id": {"type": "string"},
                                     "voice": {"type": "string"}},
                      "required": ["content_id"]}},
+    {"name": "route_signal",
+     "description": "Jev verdict on one signal (interest/frame/monetary/template). Reports origin: live Jev or deterministic fallback.",
+     "inputSchema": {"type": "object",
+                     "properties": {"signal_id": {"type": "string"}},
+                     "required": ["signal_id"]}},
+    {"name": "rank_signals",
+     "description": "Top eligible signals for a garden, ranked by Jev interest (or deterministic score).",
+     "inputSchema": {"type": "object",
+                     "properties": {"garden": {"type": "string"},
+                                    "limit": {"type": "integer"}},
+                     "required": ["garden"]}},
     {"name": "content_status",
      "description": "What this factory can actually do right now.",
      "inputSchema": {"type": "object", "properties": {}}},

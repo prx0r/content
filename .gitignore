@@ -15,6 +15,11 @@ supertonic-tts/
 voicestudio/
 pocket-tts/
 hf-test/
+jev-ultrafast/
+typesafe-jev-examples/
+typesafe-ai-playground/
+awesome-jev-by-typesafe/
+awesome-jev/
 store/
 *.mp4
 *.wav
