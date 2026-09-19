@@ -8,5 +8,16 @@ opennolan/
 openshorts/
 socheli/
 taisly-agent/
+hyperframes/
+video-talkcraft/
+ccvideo/
+supertonic-tts/
+voicestudio/
+pocket-tts/
+hf-test/
+store/
 *.mp4
+*.wav
+*.mp3
 __pycache__/
+node_modules/

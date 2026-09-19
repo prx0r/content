@@ -56,6 +56,23 @@ fill via clipforge-commerce, MoneyPrinterTurbo stock+EdgeTTS path,
 Taisly publish dry-run. Then A/B hook/caption/BGM variants, then
 paid visuals only where attention delta justifies cost.
 
+## MCP: content-sensor (V1, verified end to end)
+
+`mcp_server.py` — stdlib only, same stdio shape as datagarden servers.
+Seven tools: `signals_top` (powpowpow | ukgraph, deterministic,
+evidence-linked) → `build_content` (signal → content.json, refuses
+metric-less signals) → `render_video` (HyperFrames 9:16 MP4, lineage
+logged) + `render_narration` ($0 Edge TTS) + `list_templates`,
+`content_status`, `lineage`.
+
+```bash
+python3 mcp_server.py --serve   # MCP stdio for agents
+```
+
+Verified 2026-09-19: PRL unprofitability signal → content → narration
+(177KB) → 9:16 MP4 → `signal_id → video_id` in store/lineage.jsonl.
+Publishing still manual. Brand SFX kit pending (Stable Audio recipes).
+
 ## Experiment protocol (the proprietary bit)
 
 hypothesis -> experiment def (hook variants x format) -> generate ->
