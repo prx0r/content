@@ -1,0 +1,12 @@
+.venv/
+atlas-marketing-studio/
+clipforge-commerce/
+clipforge-zero/
+moneyprinterturbo/
+open-ai-ugc/
+opennolan/
+openshorts/
+socheli/
+taisly-agent/
+*.mp4
+__pycache__/
