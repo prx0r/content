@@ -637,6 +637,32 @@ def build_content(signal=None, template=None):
 # RENDER (content.json -> HyperFrames 9:16 MP4, lineage logged)
 # ============================================================
 
+BRAND_DIR = ROOT / "brand"
+
+
+def _mix_audio(narration, out):
+    """Narration over looped bed (ducked) + sting head + whoosh transition."""
+    sting, whoosh, bed = (BRAND_DIR / "sting.wav", BRAND_DIR / "whoosh.wav",
+                          BRAND_DIR / "bed.wav")
+    if not (sting.exists() and whoosh.exists() and bed.exists()):
+        return None
+    nar_dur = _media_duration(narration)
+    total = nar_dur + 1.2
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(narration),
+         "-stream_loop", "-1", "-i", str(bed), "-i", str(sting), "-i", str(whoosh),
+         "-filter_complex",
+         "[0:a]adelay=800|800,volume=1.0[narr];"
+         "[1:a]volume=0.35,aloop=loop=-1:size=352800[bedl];"
+         "[bedl][narr]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=500[duck];"
+         "[3:a]adelay=900|900,volume=0.5[wh];"
+         "[duck][2:a][wh]amix=inputs=3:duration=first:dropout_transition=0,"
+         f"atrim=0:{total:.1f}",
+         "-t", f"{total:.1f}", str(out)],
+        capture_output=True, text=True, timeout=180)
+    return str(out) if r.returncode == 0 and out.exists() else None
+
+
 def _media_duration(path):
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
@@ -761,8 +787,11 @@ def render_video(content_id=None, with_audio=True):
     duration, audio_src = 8, None
     nar = STORE / f"{content_id}.narration.mp3"
     if with_audio and nar.exists():
-        shutil.copy(nar, proj / "narration.mp3")
-        duration = max(8, int(_media_duration(nar) + 1.5))
+        mix = STORE / f"{content_id}.mix.mp3"
+        mixed = _mix_audio(nar, mix) if BRAND_DIR.exists() else None
+        track = Path(mixed) if mixed else nar
+        shutil.copy(track, proj / "narration.mp3")
+        duration = max(8, int(_media_duration(track) + 1.5))
         audio_src = "narration.mp3"
     (proj / "index.html").write_text(
         _fill_anomaly_html(content, duration=duration, audio_src=audio_src))
@@ -1267,6 +1296,9 @@ def run(signal_id=None, query="OPPORTUNITY"):
     nar = render_narration(comp["content_id"])
     if nar.get("status") != "ok":
         return {"status": "FAIL", "stage": "narration", **nar}
+    mix = STORE / f"{comp['content_id']}.mix.mp3"
+    mix_out = _mix_audio(Path(nar["audio"]), mix)
+    nar["mix"] = mix_out
     rnd = render(comp["content_id"])
     if rnd.get("status") != "ok":
         return {"status": "FAIL", "stage": "render", **rnd}
