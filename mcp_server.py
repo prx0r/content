@@ -170,9 +170,167 @@ _TYPE_WEIGHTS = {  # type -> (human_relevance, actionability)
     "change": (0.8, 0.7),
     "comparison": (0.7, 0.6),
     "causal": (0.8, 0.6),
+    "concept": (0.8, 0.6),
+    "thesis": (0.8, 0.7),
 }
 
-CONTENT_WORTHY_TYPES = ("anomaly", "ranking", "geo_signal", "change", "comparison", "causal")
+CONTENT_WORTHY_TYPES = ("anomaly", "ranking", "geo_signal", "change",
+                        "comparison", "causal", "concept", "thesis")
+
+POW_COINS_PY = Path("/home/ubuntu/powpowpow/coins.py")
+POW_CATS_PY = Path("/home/ubuntu/powpowpow/categories.py")
+THESES_YAML = ROOT / "registry" / "theses.yaml"
+
+_POWREG = None
+
+
+def _pow_registry():
+    global _POWREG
+    if _POWREG is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pow_coins", str(POW_COINS_PY))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cspec = importlib.util.spec_from_file_location("pow_cats", str(POW_CATS_PY))
+        cmod = importlib.util.module_from_spec(cspec)
+        cspec.loader.exec_module(cmod)
+        _POWREG = (getattr(mod, "COINS", {}), getattr(cmod, "CATEGORIES", {}))
+    return _POWREG
+
+
+def _live_cards():
+    try:
+        return json.loads(POW_CARDS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _best_hw(card):
+    hw = card.get("hardware", {}) or {}
+    sane = {h: m for h, m in hw.items() if (m.get("revenue_usd_day") or 0) < 100_000}
+    if not sane:
+        return None, None
+    name = max(sane, key=lambda h: sane[h].get("net_profit_usd_day") or -1e18)
+    return name, sane[name]
+
+
+def _coin_category(topic, cats):
+    return [cid for cid, c in cats.items() if topic in c.get("coins", [])]
+
+
+ANGLES = ("explain", "why-now", "economics", "hardware", "signal")
+
+
+def _concept_signal(topic, angle):
+    """Deterministic Concept signal from the powpowpow registry (+live cards)."""
+    coins, cats = _pow_registry()
+    topic = (topic or "").upper()
+    angle = (angle or "explain").lower()
+    if angle not in ANGLES:
+        return {"status": "error",
+                "reason": f"Unknown angle '{angle}'. Use one of {list(ANGLES)}."}
+    if topic not in coins:
+        return {"status": "error",
+                "reason": f"Unknown topic '{topic}'. See concepts_top."}
+    c = coins[topic]
+    live = _live_cards().get(topic, {})
+    evidence = [{"file": str(POW_COINS_PY)}, {"file": str(POW_CATS_PY)}]
+    metrics = []
+    chain = c.get("chain", {}) or {}
+    if chain.get("max_supply"):
+        metrics.append({"name": f"{topic.lower()}_max_supply",
+                        "value": chain["max_supply"], "unit": "native"})
+    if chain.get("emission_per_day"):
+        metrics.append({"name": f"{topic.lower()}_emission_per_day",
+                        "value": chain["emission_per_day"], "unit": "native/day"})
+    name, desc, cons = c.get("name", topic), c.get("description", ""), c.get("consensus", "")
+    cat_ids = _coin_category(topic, cats)
+    cat_line = ""
+    if cat_ids:
+        cat_line = "; ".join(f"{cats[i].get('name', i)}: {cats[i].get('description', '')}"
+                             for i in cat_ids)
+    hw_name, hw = _best_hw(live)
+    if live:
+        evidence.append({"file": str(POW_CARDS),
+                         "observed_at": live.get("timestamp", "")})
+    if angle == "explain":
+        claim = f"{name}: {desc} Consensus: {cons}."
+        why = cat_line or "Tracked in the PowPowPow registry."
+    elif angle == "signal":
+        return {"status": "redirect", "garden": "powpowpow"}
+    else:
+        if not live or not hw:
+            return {"status": "UNAVAILABLE",
+                    "reason": f"No live economics for {topic} — collectors pending."}
+        metrics.extend([
+            {"name": "price_usd", "value": live.get("price_usd"), "unit": "USD"},
+            {"name": "revenue_usd_day", "value": hw.get("revenue_usd_day"), "unit": "USD/day"},
+            {"name": "net_profit_usd_day", "value": hw.get("net_profit_usd_day"), "unit": "USD/day"},
+            {"name": "power_watts", "value": hw.get("power_watts"), "unit": "W"},
+        ])
+        if angle == "economics":
+            claim = (f"{name} best case ({hw_name}) nets "
+                     f"${hw.get('net_profit_usd_day'):.2f}/day.")
+            why = "Revenue per unit of compute versus marginal cost at current difficulty and price."
+        elif angle == "hardware":
+            claim = (f"{name} best case runs {hw_name}: {hw.get('power_watts')}W, "
+                     f"${hw.get('cost_usd'):,.0f} hardware.")
+            why = "Hardware demand follows network growth; power draws show the physical footprint."
+        else:  # why-now
+            claim = (f"{name} best case nets ${hw.get('net_profit_usd_day'):.2f}/day "
+                     f"at ${live.get('price_usd')} right now.")
+            why = "Current difficulty and price make this the timely read."
+    return {"status": "ok", "signal": {
+        "id": f"con_{topic}_{angle}", "type": "concept", "garden": "powpowpow",
+        "title": f"{name} — {angle}",
+        "claim": claim, "why": why,
+        "entities": [topic] + cat_ids,
+        "metrics": [m for m in metrics if m.get("value") is not None],
+        "evidence": evidence, "timespan": "evergreen" if angle == "explain" else "point-in-time",
+        "confidence": 0.8 if angle == "explain" else 0.9,
+        "updated_at": utcnow()}}
+
+
+def _thesis_signals():
+    import yaml
+    doc = yaml.safe_load(THESES_YAML.read_text())
+    out = []
+    for t in doc.get("theses", []):
+        out.append({"id": t["id"], "type": "thesis", "garden": "powpowpow",
+                    "title": t["title"], "claim": t["claim"], "why": t.get("why", ""),
+                    "entities": t.get("entities", []), "metrics": t.get("metrics", []),
+                    "evidence": t.get("evidence", []), "timespan": "evergreen",
+                    "confidence": t.get("confidence", 0.6), "updated_at": utcnow()})
+    return out
+
+
+def _relationship_signal(a, b):
+    coins, cats = _pow_registry()
+    a, b = (a or "").upper(), (b or "").upper()
+    if a not in coins or b not in coins:
+        return {"status": "error", "reason": "Both topics must come from concepts_top."}
+    ca, cb = coins[a], coins[b]
+    confrontation = (f"{ca.get('name')}: {ca.get('description', '')} "
+                     f"({ca.get('consensus', '')}). {cb.get('name')}: "
+                     f"{cb.get('description', '')} ({cb.get('consensus', '')}).")
+    shared = set(_coin_category(a, cats)) & set(_coin_category(b, cats))
+    why = ("Both track the same scarce resource." if shared
+           else "Different scarce resources — different cost floors.")
+    metrics = []
+    for t, cc in ((a, ca), (b, cb)):
+        ch = cc.get("chain", {}) or {}
+        if ch.get("max_supply"):
+            metrics.append({"name": f"{t.lower()}_max_supply",
+                            "value": ch["max_supply"], "unit": "native"})
+        if ch.get("emission_per_day"):
+            metrics.append({"name": f"{t.lower()}_emission_per_day",
+                            "value": ch["emission_per_day"], "unit": "native/day"})
+    return {"status": "ok", "signal": {
+        "id": f"rel_{a}_{b}", "type": "comparison", "garden": "powpowpow",
+        "title": f"{ca.get('name')} vs {cb.get('name')} — how the approaches differ",
+        "claim": confrontation, "why": why, "entities": [a, b],
+        "metrics": metrics, "evidence": [{"file": str(POW_COINS_PY)}],
+        "timespan": "evergreen", "confidence": 0.8, "updated_at": utcnow()}}
 
 
 def _score_signal(s):
@@ -225,12 +383,49 @@ def _all_signals():
     return out
 
 
+def _resolve_signal(sid):
+    """Garden signals, Concept (con_TOPIC_angle), thesis (the_slug), rel (rel_A_B)."""
+    if not sid:
+        return None
+    for s in _all_signals():
+        if s["id"] == sid:
+            return s
+    if sid.startswith("con_"):
+        try:
+            topic, angle = sid[4:].rsplit("_", 1)
+        except ValueError:
+            return None
+        r = _concept_signal(topic, angle)
+        if r.get("status") != "ok" or "signal" not in r:
+            return None
+        s = r["signal"]
+        s["score"], s["eligible"] = _score_signal(s)
+        return s
+    if sid.startswith("rel_"):
+        parts = sid[4:].split("_")
+        if len(parts) != 2:
+            return None
+        r = _relationship_signal(parts[0], parts[1])
+        if r.get("status") != "ok":
+            return None
+        s = r["signal"]
+        s["score"], s["eligible"] = _score_signal(s)
+        return s
+    if sid.startswith("the_"):
+        for s in _thesis_signals():
+            if s["id"] == sid:
+                s = dict(s)
+                s["score"], s["eligible"] = _score_signal(s)
+                return s
+    return None
+
+
 def expand_signal(signal_id=None):
     """Seed signal -> supporting graph neighbourhood (2-4 strongest facts)."""
     if not signal_id:
         return {"status": "error", "reason": "Pass signal_id from signals_top."}
     alls = _all_signals()
-    seed = next((s for s in alls if s["id"] == signal_id), None)
+    seed = _resolve_signal(signal_id)
     if not seed:
         return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
     supporting = [s for s in alls
@@ -252,6 +447,8 @@ TEMPLATE_FOR_TYPE = {
     "change": "what_changed",
     "geo_signal": "map",
     "causal": "why",
+    "concept": "explainer",
+    "thesis": "why",
 }
 
 TEMPLATES = {
@@ -262,9 +459,11 @@ TEMPLATES = {
     "map": {"beats": 3, "use": "place-anchored precursor signal"},
     "why": {"beats": 3, "use": "causal chain in plain words"},
     "opportunity": {"beats": 4, "use": "what someone can do because of this"},
+    "explainer": {"beats": 4, "use": "what it is, why it matters, what connects"},
 }
 
 QUERIES = {
+    "EXPLAIN": ("explainer", "What {entities} actually is."),
     "CHANGE": ("what_changed", "What changed: {title}"),
     "WHY": ("why", "Why: {title}"),
     "WHERE": ("map", "Where it's strongest: {title}"),
@@ -294,6 +493,9 @@ def _hook_for(signal, template):
     if template == "opportunity":
         ents = ", ".join(signal.get("entities", [])[:2])
         return f"What you can do about {ents}."
+    if template == "explainer":
+        ents = ", ".join(signal.get("entities", [])[:2])
+        return f"What {ents} actually is."
     return f"Why: {signal.get('title', '')}"
 
 
@@ -524,7 +726,82 @@ JEV_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 FRAME_CHOICES = ("job_stress", "retraining", "opportunity", "geographic", "ignore")
 TEMPLATE_CHOICES = ("anomaly", "ranking", "vs", "what_changed", "map", "why",
-                    "opportunity", "ignore")
+                    "opportunity", "explainer", "ignore")
+
+
+def concepts_top():
+    """Available Concept topics from the powpowpow registry + angles."""
+    coins, cats = _pow_registry()
+    topics = []
+    for t in sorted(coins):
+        c = coins[t]
+        topics.append({"topic": t, "name": c.get("name", t),
+                       "description": c.get("description", ""),
+                       "consensus": c.get("consensus", ""),
+                       "angles": list(ANGLES)})
+    return {"status": "ok", "topics": topics,
+            "categories": [{"id": i, "name": c.get("name", i),
+                            "coins": c.get("coins", [])} for i, c in cats.items()]}
+
+
+def concept_explain(topic=None, angle="explain"):
+    """Concept -> proof + gated content (EXPLAIN query). Analytical framing only."""
+    angle = (angle or "explain").lower()
+    coins, _ = _pow_registry()
+    if (topic or "").upper() not in coins:
+        return {"status": "error",
+                "reason": f"Unknown topic '{topic}'. See concepts_top."}
+    if angle == "signal":
+        for s in _all_signals():
+            if s.get("garden") == "powpowpow" and (topic or "").upper() in s.get("entities", []) \
+                    and s.get("type") == "anomaly":
+                return {"status": "ok", "redirect": s["id"],
+                        "note": "Live anomaly exists — use content_from_signal on it."}
+        return {"status": "UNAVAILABLE",
+                "reason": f"No live anomaly for {topic} right now."}
+    sid = f"con_{(topic or '').upper()}_{angle}"
+    seed = _resolve_signal(sid)
+    if not seed:
+        return {"status": "UNAVAILABLE",
+                "reason": f"Cannot build {angle} for {topic} (no backing data)."}
+    ing = ingest(sid)
+    if ing.get("status") != "ok":
+        return ing
+    comp = compile(ing["proof"]["proof_id"], "EXPLAIN")
+    return {"status": comp.get("status", "error"),
+            "proof": ing["proof"], "content": comp.get("content"),
+            "content_id": comp.get("content_id"),
+            "gates": comp.get("gates"),
+            "compile_receipt_id": comp.get("compile_receipt_id")}
+
+
+def relationships(a=None, b=None):
+    """Two topics -> analytical comparison (how approaches differ, never buy/sell)."""
+    r = _relationship_signal(a, b)
+    if r.get("status") != "ok":
+        return r
+    seed = r["signal"]
+    seed["score"], seed["eligible"] = _score_signal(seed)
+    ing = ingest(seed["id"])
+    if ing.get("status") != "ok":
+        return ing
+    comp = compile(ing["proof"]["proof_id"], "COMPARE")
+    return {"status": comp.get("status", "error"),
+            "proof": ing["proof"], "content": comp.get("content"),
+            "content_id": comp.get("content_id"),
+            "gates": comp.get("gates"),
+            "compile_receipt_id": comp.get("compile_receipt_id")}
+
+
+def theses_top():
+    """Curated analytical theses (evergreen, evidence-linked)."""
+    out = []
+    for s in _thesis_signals():
+        s = dict(s)
+        s["score"], s["eligible"] = _score_signal(s)
+        out.append(s)
+    out.sort(key=lambda s: s.get("score", 0), reverse=True)
+    return {"status": "ok", "theses": out}
 
 
 def _jev_provider():
@@ -655,7 +932,7 @@ def route_signal(signal_id=None):
     """
     if not signal_id:
         return {"status": "error", "reason": "Pass signal_id from signals_top."}
-    seed = next((s for s in _all_signals() if s["id"] == signal_id), None)
+    seed = _resolve_signal(signal_id)
     if not seed:
         return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
     questions = _router_questions(seed)
@@ -762,7 +1039,7 @@ def ingest(signal_id=None):
     from core import proof_from_signal, append_receipt
     if not signal_id:
         return {"status": "error", "reason": "Pass signal_id from signals_top."}
-    seed = next((s for s in _all_signals() if s["id"] == signal_id), None)
+    seed = _resolve_signal(signal_id)
     if not seed:
         return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
     try:
@@ -998,6 +1275,23 @@ TOOLS = [
      "description": "Show dependency graph, receipts chain, proofs, or one proof (graph|receipts|proofs|proof:<id>).",
      "inputSchema": {"type": "object",
                      "properties": {"target": {"type": "string"}}}},
+    {"name": "concepts_top",
+     "description": "Concept topics from the powpowpow registry (10 coins + categories) with explainer angles.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "concept_explain",
+     "description": "Concept angle (explain|why-now|economics|hardware|signal) -> gated explainer content. Analytical only.",
+     "inputSchema": {"type": "object",
+                     "properties": {"topic": {"type": "string"},
+                                    "angle": {"type": "string"}},
+                     "required": ["topic"]}},
+    {"name": "relationships",
+     "description": "Two topics -> analytical comparison of how approaches differ. Never recommendations.",
+     "inputSchema": {"type": "object",
+                     "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                     "required": ["a", "b"]}},
+    {"name": "theses_top",
+     "description": "Curated evergreen theses (useful-PoW question, privacy-in-AGI, physical bottlenecks).",
+     "inputSchema": {"type": "object", "properties": {}}},
 ]
 
 DISPATCH = {t["name"]: globals()[t["name"]] for t in TOOLS}

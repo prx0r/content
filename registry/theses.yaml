@@ -1,0 +1,33 @@
+# Curated theses — analytical framing only, never recommendations.
+theses:
+  - id: the_useful_pow_question
+    title: "Can useful compute replace wasted proof-of-work?"
+    claim: "5 tracked networks pay for useful work; 4 pay for pure security/privacy."
+    why: "If AI demand soaks up compute, the cost floor of useful-work networks behaves differently from pure-security ones."
+    entities: [useful-pow, pow-privacy]
+    metrics:
+      - {name: useful_pow_networks, value: 5, unit: count}
+      - {name: security_privacy_networks, value: 4, unit: count}
+    evidence: [{file: /home/ubuntu/powpowpow/categories.py}]
+    confidence: 0.7
+
+  - id: the_privacy_in_agi
+    title: "Why privacy assets matter as agents get stronger"
+    claim: "XMR is the only live-card asset whose mining buys pure private settlement, not compute."
+    why: "Agents settling value privately need settlement rails that are not surveillance surfaces."
+    entities: [XMR, privacy]
+    metrics:
+      - {name: privacy_networks_tracked, value: 4, unit: count}
+    evidence: [{file: /home/ubuntu/powpowpow/categories.py}]
+    confidence: 0.6
+
+  - id: the_physical_bottlenecks
+    title: "Which assets sit on physical bottlenecks?"
+    claim: "Best-case PRL rigs draw 450-700W; XMR rigs draw 120-170W for cents of revenue."
+    why: "Power and hardware reveal which networks break first when energy prices move."
+    entities: [power, hardware, PRL, XMR]
+    metrics:
+      - {name: prl_h100_power_watts, value: 700, unit: W}
+      - {name: xmr_ryzen_power_watts, value: 120, unit: W}
+    evidence: [{file: /home/ubuntu/powpowpow/v1_live_cards.json}]
+    confidence: 0.8

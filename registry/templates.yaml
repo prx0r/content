@@ -42,3 +42,9 @@ templates:
     requires: [claim, proof_facts, evidence]
     scenes: [hook, claim, proof, close, source]
     capabilities: [voice.tts, visual.metric, render.vertical]
+  explainer:
+    id: concept_explainer_v1
+    accepts: [concept]
+    requires: [definition, mechanism, chain_facts, evidence]
+    scenes: [hook, what_it_is, why_it_matters, connections, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
