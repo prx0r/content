@@ -59,11 +59,17 @@ paid visuals only where attention delta justifies cost.
 ## MCP: content-sensor (V1, verified end to end)
 
 `mcp_server.py` — stdlib only, same stdio shape as datagarden servers.
-Seven tools: `signals_top` (powpowpow | ukgraph, deterministic,
-evidence-linked) → `build_content` (signal → content.json, refuses
-metric-less signals) → `render_video` (HyperFrames 9:16 MP4, lineage
-logged) + `render_narration` ($0 Edge TTS) + `list_templates`,
-`content_status`, `lineage`.
+Nine tools implementing `docs/deterministic-view-spec.md`:
+`signals_top` (powpowpow | ukgraph, scored by interestingness,
+worthiness-gated) → `expand_signal` (seed → supporting neighbourhood)
+→ `content_from_signal` (CHANGE|WHY|WHERE|COMPARE|OPPORTUNITY|WARNING
+→ hook/claim/proof/close/source_ids manifest) → `render_video`
+(HyperFrames 9:16 MP4, lineage logged) + `render_narration` ($0 Edge
+TTS) + `build_content`, `list_templates`, `content_status`, `lineage`.
+
+Sanity gates are load-bearing: expansion caught KAS rig figures at
+$3.3B/day in the source cards — absurd rigs are excluded with notes,
+not rendered.
 
 ```bash
 python3 mcp_server.py --serve   # MCP stdio for agents

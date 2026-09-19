@@ -60,12 +60,18 @@ def _pow_signals(limit):
     observed = {c: cards[c].get("timestamp", "") for c in cards}
     signals = []
     best_net = {}
+    excluded = []
     for coin, card in cards.items():
         hw = card.get("hardware", {})
-        if not hw:
+        sane = {h: m for h, m in hw.items()
+                if (m.get("revenue_usd_day") or 0) < 100_000}
+        for h in hw:
+            if h not in sane:
+                excluded.append(f"{coin}/{h} revenue ${hw[h].get('revenue_usd_day'):,.0f}/day")
+        if not sane:
             continue
-        name = max(hw, key=lambda h: hw[h].get("net_profit_usd_day") or -1e18)
-        m = hw[name]
+        name = max(sane, key=lambda h: sane[h].get("net_profit_usd_day") or -1e18)
+        m = sane[name]
         best_net[coin] = m.get("net_profit_usd_day")
         if (m.get("net_profit_usd_day") or 0) < 0:
             signals.append({
@@ -100,6 +106,7 @@ def _pow_signals(limit):
             "evidence": [{"file": str(POW_CARDS), "observed_at": max(observed.values())}],
             "timespan": "point-in-time",
             "confidence": 0.9,
+            "notes": (f"Excluded implausible rigs: {'; '.join(excluded)}" if excluded else ""),
             "updated_at": utcnow(),
         })
     return {"status": "ok", "signals": signals[:limit]}
@@ -155,19 +162,83 @@ def _uk_signals(limit):
     return {"status": "ok", "signals": signals[:limit]}
 
 
+# interestingness = magnitude x confidence x novelty x relevance x actionability
+_TYPE_WEIGHTS = {  # type -> (human_relevance, actionability)
+    "anomaly": (0.9, 0.8),
+    "ranking": (0.7, 0.7),
+    "geo_signal": (0.8, 0.8),
+    "change": (0.8, 0.7),
+    "comparison": (0.7, 0.6),
+    "causal": (0.8, 0.6),
+}
+
+CONTENT_WORTHY_TYPES = ("anomaly", "ranking", "geo_signal", "change", "comparison", "causal")
+
+
+def _score_signal(s):
+    mag = 0.5
+    for m in s.get("metrics", []) or []:
+        v = m.get("value")
+        if isinstance(v, (int, float)):
+            name = (m.get("name") or "").lower()
+            unit = (m.get("unit") or "")
+            if unit == "%" or "change" in name or "pressure" in name:
+                mag = max(mag, min(abs(v) / 30.0, 1.0))
+    rel, act = _TYPE_WEIGHTS.get(s.get("type"), (0.5, 0.5))
+    conf = s.get("confidence", 0.5) or 0.5
+    score = round(mag * conf * 1.0 * rel * act, 3)  # novelty = 1.0 on Day 0
+    eligible = bool(s.get("metrics") and s.get("evidence")
+                    and conf >= 0.5 and s.get("type") in CONTENT_WORTHY_TYPES)
+    return score, eligible
+
+
 def signals_top(garden="powpowpow", limit=10):
-    """Deterministic candidate signals from on-disk garden data."""
+    """Deterministic candidate signals from on-disk garden data, scored."""
     garden = (garden or "").lower()
     try:
         limit = max(1, min(int(limit), 25))
     except (TypeError, ValueError):
         limit = 10
     if garden in ("pow", "powpowpow", "resources"):
-        return _pow_signals(limit)
-    if garden in ("uk", "ukgraph", "ukopportunity"):
-        return _uk_signals(limit)
-    return {"status": "error",
-            "reason": f"Unknown garden '{garden}'. Use 'powpowpow' or 'ukgraph'."}
+        res = _pow_signals(limit)
+    elif garden in ("uk", "ukgraph", "ukopportunity"):
+        res = _uk_signals(limit)
+    else:
+        return {"status": "error",
+                "reason": f"Unknown garden '{garden}'. Use 'powpowpow' or 'ukgraph'."}
+    if res.get("status") == "ok":
+        for s in res["signals"]:
+            s["score"], s["eligible"] = _score_signal(s)
+        res["signals"].sort(key=lambda s: s.get("score", 0), reverse=True)
+    return res
+
+
+def _all_signals():
+    out = []
+    for garden in ("powpowpow", "ukgraph"):
+        r = signals_top(garden, 25)
+        if r.get("status") == "ok":
+            for s in r["signals"]:
+                s = dict(s)
+                s["garden"] = garden
+                out.append(s)
+    return out
+
+
+def expand_signal(signal_id=None):
+    """Seed signal -> supporting graph neighbourhood (2-4 strongest facts)."""
+    if not signal_id:
+        return {"status": "error", "reason": "Pass signal_id from signals_top."}
+    alls = _all_signals()
+    seed = next((s for s in alls if s["id"] == signal_id), None)
+    if not seed:
+        return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
+    supporting = [s for s in alls
+                  if s["id"] != signal_id and s["garden"] == seed["garden"]]
+    supporting.sort(key=lambda s: s.get("score", 0), reverse=True)
+    supporting = supporting[:3]
+    return {"status": "ok", "seed": seed, "supporting": supporting,
+            "facts": [seed.get("claim", "")] + [s.get("claim", "") for s in supporting]}
 
 
 # ============================================================
@@ -190,6 +261,16 @@ TEMPLATES = {
     "what_changed": {"beats": 3, "use": "before/after change"},
     "map": {"beats": 3, "use": "place-anchored precursor signal"},
     "why": {"beats": 3, "use": "causal chain in plain words"},
+    "opportunity": {"beats": 4, "use": "what someone can do because of this"},
+}
+
+QUERIES = {
+    "CHANGE": ("what_changed", "What changed: {title}"),
+    "WHY": ("why", "Why: {title}"),
+    "WHERE": ("map", "Where it's strongest: {title}"),
+    "COMPARE": ("vs", "{entities} head to head."),
+    "OPPORTUNITY": ("opportunity", "What you can do about {entities}."),
+    "WARNING": ("anomaly", "Who's exposed: {title}"),
 }
 
 
@@ -210,7 +291,59 @@ def _hook_for(signal, template):
         return f"What changed: {signal.get('title', '')}"
     if template == "map":
         return f"On the map: {signal.get('title', '')}"
+    if template == "opportunity":
+        ents = ", ".join(signal.get("entities", [])[:2])
+        return f"What you can do about {ents}."
     return f"Why: {signal.get('title', '')}"
+
+
+def content_from_signal(signal_id=None, query="CHANGE"):
+    """Seed signal -> query expansion -> render manifest (hook/claim/proof/close)."""
+    query = (query or "CHANGE").upper()
+    if query not in QUERIES:
+        return {"status": "error",
+                "reason": f"Unknown query '{query}'. Use one of {sorted(QUERIES)}."}
+    exp = expand_signal(signal_id)
+    if exp.get("status") != "ok":
+        return exp
+    seed, supporting = exp["seed"], exp["supporting"]
+    if not seed.get("eligible", True):
+        return {"status": "error",
+                "reason": "Signal fails the content-worthiness gate (needs metrics + evidence)."}
+    template, hook_t = QUERIES[query]
+    hook = hook_t.format(title=seed.get("title", ""),
+                         entities=", ".join(seed.get("entities", [])[:2]))
+    proof = []
+    if seed.get("metrics"):
+        m = seed["metrics"][0]
+        proof.append(f"{m['name']}: {m['value']} {m.get('unit', '')}".strip())
+    for s in supporting[:3]:
+        if s.get("claim"):
+            proof.append(s["claim"])
+    proof = proof[:4]
+    close = seed.get("why", "")
+    beats = [seed.get("claim", "")] + proof[1:3]
+    if close:
+        beats.append(close)
+    content = {
+        "signal_id": seed["id"],
+        "query": query,
+        "template": template,
+        "hook": hook,
+        "claim": seed.get("claim", ""),
+        "proof": proof,
+        "close": close,
+        "source_ids": [seed["id"]] + [s["id"] for s in supporting],
+        "beats": beats[:4],
+        "source_label": f"{seed.get('entities', ['garden'])[0]} · Sep 2026",
+        "metrics": seed.get("metrics", []),
+        "evidence": seed.get("evidence", []),
+        "created_at": utcnow(),
+    }
+    cid = "content_" + seed["id"].replace("sig_", "") + "_" + query.lower()
+    path = STORE / f"{cid}.json"
+    path.write_text(json.dumps(content, indent=2))
+    return {"status": "ok", "content_id": cid, "path": str(path), "content": content}
 
 
 def build_content(signal=None, template=None):
@@ -230,8 +363,13 @@ def build_content(signal=None, template=None):
         beats.append(signal["why"])
     content = {
         "signal_id": signal["id"],
+        "query": "DIRECT",
         "template": template,
         "hook": _hook_for(signal, template),
+        "claim": signal.get("claim", ""),
+        "proof": beats[1:4],
+        "close": signal.get("why", ""),
+        "source_ids": [signal["id"]],
         "beats": beats[:4],
         "source_label": f"{signal.get('entities', ['garden'])[0]} · Sep 2026",
         "metrics": signal.get("metrics", []),
@@ -428,6 +566,17 @@ TOOLS = [
                      "properties": {"signal": {"type": "object"},
                                     "template": {"type": "string"}},
                      "required": ["signal"]}},
+    {"name": "expand_signal",
+     "description": "Seed signal -> supporting graph neighbourhood (2-4 strongest facts, same garden).",
+     "inputSchema": {"type": "object",
+                     "properties": {"signal_id": {"type": "string"}},
+                     "required": ["signal_id"]}},
+    {"name": "content_from_signal",
+     "description": "Seed signal + query (CHANGE|WHY|WHERE|COMPARE|OPPORTUNITY|WARNING) -> render manifest (hook/claim/proof/close/source_ids). Worthiness-gated.",
+     "inputSchema": {"type": "object",
+                     "properties": {"signal_id": {"type": "string"},
+                                    "query": {"type": "string"}},
+                     "required": ["signal_id"]}},
     {"name": "render_video",
      "description": "Render content_id to 9:16 MP4 via HyperFrames. Logs signal_id -> video_id lineage.",
      "inputSchema": {"type": "object",
