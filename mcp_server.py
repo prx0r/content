@@ -588,18 +588,51 @@ def build_content(signal=None, template=None):
 # RENDER (content.json -> HyperFrames 9:16 MP4, lineage logged)
 # ============================================================
 
-def _fill_anomaly_html(content):
+def _media_duration(path):
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "stream=duration", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True, timeout=30)
+        vals = [float(x) for x in r.stdout.split() if x.strip()]
+        return max(vals) if vals else 0.0
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _fill_anomaly_html(content, duration=8, audio_src=None):
     sig_title = content.get("hook", "")
     metrics = content.get("metrics", []) or [{}]
     m0 = metrics[0]
     big = m0.get("value", "?")
+    name = str(m0.get("name", "")).lower()
+    unit = str(m0.get("unit", ""))
+    signed = unit == "%" or any(k in name for k in ("change", "pressure", "net", "delta"))
+
+    def _human(v):
+        a = abs(v)
+        if a >= 1e9:
+            return f"{v / 1e9:.0f}B"
+        if a >= 1e6:
+            return f"{v / 1e6:.0f}M"
+        if a >= 1e3:
+            return f"{v / 1e3:.0f}K"
+        return f"{v:,.0f}"
+
     try:
-        big = f"{float(big):+.0f}{m0.get('unit', '')}"
+        v = float(big)
+        big = (f"{v:+.0f} {unit}" if signed else f"{_human(v)} {unit}").strip()
     except (TypeError, ValueError):
-        big = f"{big} {m0.get('unit', '')}".strip()
+        big = f"{big} {unit}".strip()
+    metric_size = 200 if len(big) <= 8 else (140 if len(big) <= 12 else 96)
     beats = content.get("beats", [])
-    evidence = (beats[1] if len(beats) > 1 else "") + (
+    evidence = (beats[0] if beats else "") + (
         f" · {content.get('source_label', '')}" if content.get("source_label") else "")
+    if audio_src:
+        audio_tag = (f'<audio id="narration" class="clip" data-start="0" '
+                     f'data-duration="{duration}" '
+                     f'data-track-index="2" src="{audio_src}"></audio>')
+    else:
+        audio_tag = ""
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -613,7 +646,7 @@ def _fill_anomaly_html(content):
       #root {{ width: 100%; height: 100%; display: flex; flex-direction: column;
         justify-content: center; align-items: flex-start; padding: 120px 96px;
         font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-        background: #050505; color: #f7f7f5; }}
+        background: #050505; color: #f7f7f5; transform-origin: center center; }}
       .kicker {{ color: #ffb224; font-size: 40px; font-weight: 700;
         letter-spacing: 0.12em; text-transform: uppercase; }}
       #metric {{ font-size: 200px; font-weight: 800; line-height: 1.05;
@@ -625,14 +658,17 @@ def _fill_anomaly_html(content):
   </head>
   <body>
     <div id="root" data-composition-id="main" data-start="0"
-         data-duration="8" data-width="1080" data-height="1920">
+         data-duration="{duration}" data-width="1080" data-height="1920">
       <div class="kicker" id="kicker">{sig_title}</div>
-      <div id="metric">{big}</div>
+      <div id="metric" style="font-size:{metric_size}px">{big}</div>
       <div id="label">{m0.get('name', '').replace('_', ' ')}</div>
       <div id="evidence">{evidence}</div>
+      {audio_tag}
     </div>
     <script>
+      var DUR = {duration};
       var tl = gsap.timeline({{ paused: true }});
+      tl.fromTo("#root", {{ scale: 1 }}, {{ scale: 1.04, duration: DUR, ease: "none" }}, 0);
       tl.from("#kicker", {{ opacity: 0, y: 24, duration: 0.5 }}, 0);
       tl.from("#metric", {{ opacity: 0, y: 40, duration: 0.8 }}, 0.3);
       tl.from("#label", {{ opacity: 0, y: 24, duration: 0.5 }}, 0.7);
@@ -646,8 +682,12 @@ def _fill_anomaly_html(content):
 """
 
 
-def render_video(content_id=None):
-    """Render a built content.json to vertical MP4 via HyperFrames."""
+def render_video(content_id=None, with_audio=True):
+    """Render a built content.json to vertical MP4 via HyperFrames.
+
+    With_audio mixes the narration track in at render time; the video
+    runs as long as the narration needs (motion holds on the end card).
+    """
     if not content_id:
         return {"status": "error", "reason": "Pass content_id from build_content."}
     src = STORE / f"{content_id}.json"
@@ -664,7 +704,14 @@ def render_video(content_id=None):
     pkg = json.loads((HF_TEMPLATE_DIR / "package.json").read_text())
     pkg["name"] = content_id
     (proj / "package.json").write_text(json.dumps(pkg, indent=2))
-    (proj / "index.html").write_text(_fill_anomaly_html(content))
+    duration, audio_src = 8, None
+    nar = STORE / f"{content_id}.narration.mp3"
+    if with_audio and nar.exists():
+        shutil.copy(nar, proj / "narration.mp3")
+        duration = max(8, int(_media_duration(nar) + 1.5))
+        audio_src = "narration.mp3"
+    (proj / "index.html").write_text(
+        _fill_anomaly_html(content, duration=duration, audio_src=audio_src))
 
     chk = subprocess.run(["npx", "--yes", "hyperframes@0.8.50", "check"],
                          cwd=proj, capture_output=True, text=True, timeout=180)
@@ -711,7 +758,8 @@ def render_narration(content_id=None, voice="en-US-AndrewMultilingualNeural"):
         return {"status": "error", "reason": "edge-tts failed",
                 "detail": (r.stdout + r.stderr)[-1000:]}
     return {"status": "ok", "content_id": content_id, "audio": str(out),
-            "bytes": out.stat().st_size}
+            "bytes": out.stat().st_size,
+            "duration_s": _media_duration(out)}
 
 
 # ============================================================
@@ -1145,14 +1193,21 @@ def run(signal_id=None, query="OPPORTUNITY"):
     if not comp.get("gates", {}).get("passed"):
         return {"status": "FAIL", "stage": "compile", "gates": comp["gates"],
                 "compile_receipt_id": comp.get("compile_receipt_id")}
+    nar = render_narration(comp["content_id"])
+    if nar.get("status") != "ok":
+        return {"status": "FAIL", "stage": "narration", **nar}
     rnd = render(comp["content_id"])
     if rnd.get("status") != "ok":
         return {"status": "FAIL", "stage": "render", **rnd}
-    nar = render_narration(comp["content_id"])
+    streams = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "csv=p=0", rnd["mp4"]],
+        capture_output=True, text=True, timeout=30).stdout.split()
     return {"status": "ok", "signal_id": signal_id, "query": query,
             "proof_id": ing["proof"]["proof_id"],
             "content_id": comp["content_id"], "video_id": rnd["video_id"],
             "mp4": rnd["mp4"], "narration": nar.get("audio"),
+            "streams": streams,
             "receipts": {"ingest": ing["receipt_id"],
                          "compile": comp["compile_receipt_id"],
                          "render": rnd["render_receipt_id"]}}
