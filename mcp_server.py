@@ -226,6 +226,9 @@ _TYPE_WEIGHTS = {  # type -> (human_relevance, actionability)
 CONTENT_WORTHY_TYPES = ("anomaly", "ranking", "geo_signal", "change",
                         "comparison", "causal", "concept", "thesis")
 
+UKPRODUCTS_CSV = Path("/home/ubuntu/datagarden/canonical/ukproducts/2026-09-19.jsonl")
+ASHE_JSONL = Path("/home/ubuntu/datagarden/canonical/ukgraph/ashe_earnings.jsonl")
+
 POW_COINS_PY = Path("/home/ubuntu/powpowpow/coins.py")
 POW_CATS_PY = Path("/home/ubuntu/powpowpow/categories.py")
 THESES_YAML = ROOT / "registry" / "theses.yaml"
@@ -410,9 +413,13 @@ def signals_top(garden="powpowpow", limit=10):
         res = _pow_signals(limit)
     elif garden in ("uk", "ukgraph", "ukopportunity"):
         res = _uk_signals(limit)
+    elif garden in ("ukproducts", "breadup", "products"):
+        res = _products_signals(limit)
+    elif garden in ("ashe", "wages"):
+        res = _ashe_signals(limit)
     else:
         return {"status": "error",
-                "reason": f"Unknown garden '{garden}'. Use 'powpowpow' or 'ukgraph'."}
+                "reason": f"Unknown garden '{garden}'. Use powpowpow | ukgraph | ukproducts | ashe."}
     if res.get("status") == "ok":
         for s in res["signals"]:
             s["score"], s["eligible"] = _score_signal(s)
@@ -420,9 +427,89 @@ def signals_top(garden="powpowpow", limit=10):
     return res
 
 
+def _products_signals(limit):
+    if not UKPRODUCTS_CSV.exists():
+        return {"status": "UNAVAILABLE", "reason": "ukproducts canonical missing"}
+    rows = [json.loads(l) for l in UKPRODUCTS_CSV.read_text().splitlines() if l.strip()]
+    flips = [r for r in rows if r.get("metric") == "charity_shop_margin"]
+    signals = []
+    if flips:
+        top = max(flips, key=lambda r: r.get("value", {}).get("margin_pct", 0) or 0)
+        v = top.get("value", {})
+        signals.append({
+            "id": sig_id("products", "flip", str(v.get("brand", ""))),
+            "type": "ranking",
+            "title": (f"Charity flip: {v.get('brand')} bought £{v.get('buy_price_gbp')} "
+                      f"sold £{v.get('sell_price_gbp')} in {v.get('days_to_sell')} days"),
+            "claim": (f"{v.get('brand')}: buy £{v.get('buy_price_gbp')}, "
+                      f"sell £{v.get('sell_price_gbp')} ({v.get('margin_pct')}% margin, "
+                      f"{v.get('days_to_sell')} days on {v.get('platform')})."),
+            "why": "Second-hand spreads persist where sourcing skill beats listing skill.",
+            "entities": [str(v.get("brand", "")).lower(), "flip", str(v.get("platform", ""))],
+            "metrics": [
+                {"name": "margin_pct", "value": v.get("margin_pct"), "unit": "%"},
+                {"name": "days_to_sell", "value": v.get("days_to_sell"), "unit": "days"},
+                {"name": "buy_price_gbp", "value": v.get("buy_price_gbp"), "unit": "GBP"},
+                {"name": "sell_price_gbp", "value": v.get("sell_price_gbp"), "unit": "GBP"},
+            ],
+            "evidence": [{"file": str(UKPRODUCTS_CSV),
+                          "observation_id": top.get("observation_id", "")}],
+            "timespan": "30d",
+            "confidence": 0.6,
+            "updated_at": utcnow(),
+        })
+    if not signals:
+        return {"status": "UNAVAILABLE", "reason": "no flip margins computed yet"}
+    return {"status": "ok", "signals": signals[:limit]}
+
+
+def _ashe_signals(limit):
+    if not ASHE_JSONL.exists():
+        return {"status": "UNAVAILABLE", "reason": "ashe canonical missing"}
+    by_occ = {}
+    for l in ASHE_JSONL.read_text().splitlines():
+        if not l.strip():
+            continue
+        r = json.loads(l)
+        v = r.get("value", {})
+        pay = v.get("median_annual_pay")
+        if not pay:
+            continue
+        by_occ.setdefault((v.get("occupation_code"), v.get("occupation_name")),
+                          {}).setdefault(v.get("year"), []).append(pay)
+    import statistics
+    changes = []
+    for (code, name), years in by_occ.items():
+        if 2022 in years and 2023 in years:
+            m22 = statistics.median(years[2022])
+            m23 = statistics.median(years[2023])
+            if m22 > 0:
+                changes.append(((m23 - m22) / m22 * 100, name, code, m22, m23))
+    if not changes:
+        return {"status": "UNAVAILABLE", "reason": "no overlapping years"}
+    changes.sort(reverse=True)
+    top = changes[:5]
+    champ = top[0]
+    return {"status": "ok", "signals": [{
+        "id": sig_id("ashe", "pay-risers-2023"),
+        "type": "ranking",
+        "title": f"Fastest-rising UK pay 2022-23: {champ[1]} up {champ[0]:.0f}%",
+        "claim": ("Biggest median-pay rises: " + "; ".join(
+            f"{n} +{p:.0f}% (£{a:,.0f}→£{b:,.0f})" for p, n, c, a, b in top) + "."),
+        "why": "Pay momentum reveals scarcity before vacancy data confirms it.",
+        "entities": ["wages", "ashe", "2023"],
+        "metrics": [{"name": "pay_change_pct", "value": round(p, 1), "unit": "%"}
+                    for p, n, c, a, b in top],
+        "evidence": [{"file": str(ASHE_JSONL)}],
+        "timespan": "12m",
+        "confidence": 0.8,
+        "updated_at": utcnow(),
+    }][:limit]}
+
+
 def _all_signals():
     out = []
-    for garden in ("powpowpow", "ukgraph"):
+    for garden in ("powpowpow", "ukgraph", "ukproducts", "ashe"):
         r = signals_top(garden, 25)
         if r.get("status") == "ok":
             for s in r["signals"]:
