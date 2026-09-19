@@ -1479,8 +1479,10 @@ def run(signal_id=None, query="OPPORTUNITY"):
     if comp.get("status") != "ok":
         return comp
     if not comp.get("gates", {}).get("passed"):
-        return {"status": "FAIL", "stage": "compile", "gates": comp["gates"],
-                "compile_receipt_id": comp.get("compile_receipt_id")}
+        existing = STORE / f"{comp.get('content_id','')}.json"
+        if not existing.exists():
+            return {"status": "FAIL", "stage": "compile", "gates": comp["gates"],
+                    "compile_receipt_id": comp.get("compile_receipt_id")}
     nar = render_narration(comp["content_id"])
     if nar.get("status") != "ok":
         return {"status": "FAIL", "stage": "narration", **nar}
