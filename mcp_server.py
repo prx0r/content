@@ -137,6 +137,33 @@ def _uk_signals(limit):
             "confidence": 0.5,
             "updated_at": utcnow(),
         })
+    if UK_PLANNING.exists():
+        rows = [json.loads(l) for l in UK_PLANNING.read_text().splitlines() if l.strip()]
+        fams = {"extensions": ("extension", "infill"),
+                "commercial": ("commercial", "office", "retail"),
+                "conversions": ("conversion", "change of use"),
+                "new_build": ("new build", "new-build", "dwellings")}
+        counts = {}
+        for fam, kws in fams.items():
+            counts[fam] = sum(1 for r in rows if any(
+                k in r.get("data", {}).get("description", "").lower() for k in kws))
+        if sum(counts.values()) > 0:
+            top = max(counts, key=counts.get)
+            signals.append({
+                "id": sig_id("uk", "planning", "workload-mix"),
+                "type": "ranking",
+                "title": f"Planning workload led by {top} ({counts[top]} of {len(rows)} applications)",
+                "claim": ("Development mix: " + ", ".join(
+                    f"{f.replace('_', ' ')} {c}" for f, c in sorted(counts.items(), key=lambda kv: -kv[1])) + "."),
+                "why": "Workload mix previews which trades get pulled first.",
+                "entities": ["planning"] + [f for f, c in counts.items() if c],
+                "metrics": [{"name": f"{f}_applications", "value": c, "unit": "count"}
+                            for f, c in counts.items()],
+                "evidence": [{"file": str(UK_PLANNING)}],
+                "timespan": "7d",
+                "confidence": 0.7,
+                "updated_at": utcnow(),
+            })
     if UK_CONTRACTS.exists():
         rows = [json.loads(l) for l in UK_CONTRACTS.read_text().splitlines() if l.strip()]
         cons = [(r.get("data", {}).get("value_gbp", 0) or 0,
@@ -157,6 +184,28 @@ def _uk_signals(limit):
             "confidence": 0.7,
             "updated_at": utcnow(),
         })
+        buyers = {}
+        for r in rows:
+            d = r.get("data", {})
+            b = d.get("buyer", "") or "unknown"
+            buyers[b] = buyers.get(b, 0) + (d.get("value_gbp", 0) or 0)
+        top_buyers = sorted(buyers.items(), key=lambda kv: -kv[1])[:3]
+        if top_buyers and top_buyers[0][1] > 0:
+            signals.append({
+                "id": sig_id("uk", "contracts", "buyer-concentration"),
+                "type": "ranking",
+                "title": f"Contract spend concentrated: {top_buyers[0][0][:50]} leads at £{top_buyers[0][1]:,.0f}",
+                "claim": ("Top buyers by advertised value: " + "; ".join(
+                    f"{b[:40]} £{v:,.0f}" for b, v in top_buyers) + "."),
+                "why": "Buyer concentration shows where public money routes.",
+                "entities": ["contracts", "buyers"],
+                "metrics": [{"name": "buyer_value_gbp", "value": v, "unit": "GBP"}
+                            for _, v in top_buyers],
+                "evidence": [{"file": str(UK_CONTRACTS)}],
+                "timespan": "7d",
+                "confidence": 0.6,
+                "updated_at": utcnow(),
+            })
     if not signals:
         return {"status": "UNAVAILABLE", "reason": "ukgraph planning/contracts data missing"}
     return {"status": "ok", "signals": signals[:limit]}
@@ -620,9 +669,14 @@ def _fill_anomaly_html(content, duration=8, audio_src=None):
 
     try:
         v = float(big)
-        big = (f"{v:+.0f} {unit}" if signed else f"{_human(v)} {unit}").strip()
+        if unit.lower() == "count":
+            big = _human(v)
+        else:
+            big = (f"{v:+.0f}\u00a0{unit}" if signed else f"{_human(v)}\u00a0{unit}").strip()
     except (TypeError, ValueError):
         big = f"{big} {unit}".strip()
+    label = m0.get("name", "").replace("_", " ")
+    kicker = sig_title if len(sig_title) <= 110 else sig_title[:107] + "…"
     metric_size = 200 if len(big) <= 8 else (140 if len(big) <= 12 else 96)
     beats = content.get("beats", [])
     evidence = (beats[0] if beats else "") + (
@@ -659,9 +713,9 @@ def _fill_anomaly_html(content, duration=8, audio_src=None):
   <body>
     <div id="root" data-composition-id="main" data-start="0"
          data-duration="{duration}" data-width="1080" data-height="1920">
-      <div class="kicker" id="kicker">{sig_title}</div>
+      <div class="kicker" id="kicker">{kicker}</div>
       <div id="metric" style="font-size:{metric_size}px">{big}</div>
-      <div id="label">{m0.get('name', '').replace('_', ' ')}</div>
+      <div id="label">{label}</div>
       <div id="evidence">{evidence}</div>
       {audio_tag}
     </div>
@@ -719,8 +773,14 @@ def render_video(content_id=None, with_audio=True):
         return {"status": "error", "reason": "hyperframes check failed",
                 "detail": (chk.stdout + chk.stderr)[-2000:]}
 
-    rnd = subprocess.run(["npx", "--yes", "hyperframes@0.8.50", "render"],
-                         cwd=proj, capture_output=True, text=True, timeout=600)
+    rnd = subprocess.run(["npx", "--yes", "hyperframes@0.8.50", "render",
+                          "--low-memory-mode"],
+                         cwd=proj, capture_output=True, text=True, timeout=900)
+    for work in (proj / "renders").glob("work-*"):
+        try:
+            shutil.rmtree(work, ignore_errors=True)
+        except OSError:
+            pass
     mp4s = sorted((proj / "renders").glob("*.mp4")) if (proj / "renders").exists() else []
     if rnd.returncode != 0 or not mp4s:
         return {"status": "error", "reason": "hyperframes render failed",
@@ -751,8 +811,8 @@ def render_narration(content_id=None, voice="en-US-AndrewMultilingualNeural"):
     content = json.loads(src.read_text())
     text = content.get("hook", "") + " " + " ".join(content.get("beats", []))
     out = STORE / f"{content_id}.narration.mp3"
-    r = subprocess.run([str(EDGE_TTS_BIN), "--voice", voice, "--text", text,
-                        "--write-media", str(out)],
+    r = subprocess.run([str(EDGE_TTS_BIN), "--voice", voice, "--rate=+20%",
+                        "--text", text, "--write-media", str(out)],
                        capture_output=True, text=True, timeout=180)
     if r.returncode != 0 or not out.exists():
         return {"status": "error", "reason": "edge-tts failed",
