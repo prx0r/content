@@ -1,111 +1,120 @@
-# content — datagarden content sensor
+# content
 
-One-command content factories on top of commodity renderers.
-Own the measurements, not the video renderer.
+Content factory for prx0r's data garden system. Deterministic pipeline from graph signals to rendered 9:16 MP4s with narration, sound design, and receipt-chained lineage.
+
+**Live stack:** HyperFrames (render) + Edge TTS (narration) + ffmpeg brand kit (sting/whoosh/bed) + OpenRouter Jev (ranking) + OpenCode Go (pi thinking) + influence dash (review/approve). No API keys required for the $0 path.
+
+## Quick start
+
+```bash
+# signals
+python3 mcp_server.py signals_top '{"garden":"ukgraph","limit":3}'
+
+# rank + route (Jev or deterministic fallback)
+python3 mcp_server.py rank_signals '{"garden":"ukgraph","limit":3}'
+
+# generate end-to-end (proof → gate → narrate → mix → render → lineage)
+python3 mcp_server.py run '{"signal_id":"sig_52567c66646e","query":"OPPORTUNITY"}'
+
+# review queue
+python3 mcp_server.py lineage '{"limit":10}'
+
+# dash
+python3 mcp_server.py inspect '{"target":"receipts"}'
+```
 
 ## Architecture
 
 ```text
-DATAGARDEN verified hypothesis
-  -> CONTENT COMPILER (format DB + channel DB + experiment DB)
-  -> creative spec
-  -> ROUTER (cheapest sufficient visual)
-  -> commodity renderer -> MP4
-  -> publisher -> YT/IG/FB
-  -> analytics -> RESPONSE GARDEN -> updated priors
+SIGNALS (deterministic transforms over graph data)
+   ↓ interestingness scoring + worthiness gate
+CONTENT COMPILER (hook / claim / proof / close / source_ids)
+   ↓ content gates (evidence-fresh, no-duplicate, claim-resolved)
+JUDGE (Jev or fallback: interest / frame / monetary / template)
+   ↓
+RENDERER (HyperFrames 9:16, audio mixed in)
+   ↓
+LINEAGE (signal_id → video_id, hash-chained receipts)
+   ↓
+DASHBOARD (review / approve / measure → publish receipt)
 ```
 
-Visual cost ladder: chart/map/text ($0) -> existing asset + motion ($0)
--> stock ($0) -> AI still + motion (~$0.001-0.02) -> avatar (~$0.05-0.50)
--> full generative video (~$0.10-1+). Creative spend flows toward
-scarce attention response. Premium only after $0 is locked down.
+## MCP tools (27)
 
-## Repos (all --depth 1, 2026-09-19)
+### Signal layer
+`signals_top` · `rank_signals` · `route_signal` · `expand_signal`
 
-| Dir | Upstream | Role |
-|-----|----------|------|
-| socheli | Socheli/socheli | Control-plane reference: research->plan->create->publish->analyze, Brand Genome, MCP |
-| openshorts | Serialabs/openshorts | Ready-made all-in-one, ~$0.65 UGC path |
-| moneyprinterturbo | harry0703/MoneyPrinterTurbo | Boring reliable $0 base: stock + TTS + captions + direct publish |
-| opennolan | het8802/OpenNolan | Agentic editor: FFmpeg / Remotion / HyperFrames patterns to steal |
-| open-ai-ugc | Anil-matcha/Open-AI-UGC | Generative actor front end (Veo/Seedance/Grok, pay-per-use) |
-| atlas-marketing-studio | AtlasCloudAI/atlas-marketing-studio | Reference-structure + new-info -> new short |
-| clipforge-zero | DarkPancakes/clipforge | $0 baseline: Groq-free LLM + Edge TTS + FLUX/fallback + Ken Burns |
-| clipforge-commerce | xixihhhh/clipforge | $0 commerce path: Openverse/Wikimedia + Edge TTS + FFmpeg, no key |
-| taisly-agent | taisly/agent | Publishing primitive: TikTok/Reels/Shorts/X/FB via SDK/CLI/MCP |
+### Content layer
+`content_from_signal` · `build_content` · `list_templates` · `concepts_top` · `concept_explain` · `relationships` · `theses_top`
 
-Kalinga skipped: no canonical repo found (Higgsfield-adjacent, ambiguous).
+### Execution layer
+`run` · `ingest` · `compile` · `render_video` · `render_narration` · `publish` · `measure`
 
-## $0 baseline (verified)
+### System layer
+`content_status` · `lineage` · `inspect`
 
-venv at `.venv` (edge-tts, click, requests, fal-client, clipforge-zero installed).
-ffmpeg 6.1.1 system. No API keys used.
+## Gardens
 
-```bash
-.venv/bin/clipforge generate \
-  --script "Something strange just happened to GPU economics..." \
-  --output test_zero_baseline.mp4
+| Garden | Data source | Signal type |
+|--------|------------|-------------|
+| powpowpow | v1_live_cards.json + coins.py | anomaly, ranking, concept, thesis |
+| ukgraph | planning + contracts JSONL | geo_signal, ranking, comparison |
+| ukproducts | charity margins + eBay solds | ranking (flip margins) |
+| ashe | ASHE earnings JSONL | ranking (wage change YoY) |
+| hpi | Land Registry HPI CSV | comparison (type divergence) |
+| boring | painful_tasks.py | ranking (delay penalties) |
+
+## Content review
+
+25 videos in queue (as of 2026-09-19). All 25+ seconds with narration mixed in. Dash at `https://watch.moltwork.com` with full video playback in editor area.
+
+## Pi agent
+
+Extension at `pi-extension/content-sensor.ts` (also installed at `~/.pi/agent/extensions/`). Six tools: `content_signals`, `content_rank`, `content_expand`, `content_compile`, `content_queue`, `content_status`. Pi thinks via OpenCode Go, tools via content MCP stdio.
+
+## Directory layout
+
+```
+content/
+├── mcp_server.py          # all 27 tools, stdlib only
+├── core/                  # influence kernel (proof, processor, artifact, receipt, gates)
+├── registry/              # processors, modules, templates, theses (YAML)
+├── channels/              # ukgraph, powpowpow profiles (YAML)
+├── templates/             # anomaly, ranking, comparison, map, causal, opportunity
+├── brand/                 # sting.wav, whoosh.wav, bed.wav + build.sh
+├── pi-extension/          # content-sensor.ts (pi tool bridge)
+├── docs/                  # specs (deterministic-view, influence-kernel, jev, powpowpow-knowledge-compiler, pi-agent-path)
+├── tests/                 # 8 kernel tests (proof refusal, forbidden keys, duplicate gate, chain verify)
+├── receipts/              # content.jsonl (hash-chained, append-only)
+├── store/                 # proofs, lineage, content.json, narration.mp3, mix.mp3, projects/*/renders/*.mp4
+├── hyperframes/           # renderer (gitignored, cloned --depth 1)
+├── clipforge-zero/        # $0 fallback renderer (gitignored)
+├── video-talkcraft/       # motion grammar reference (gitignored)
+├── socheli/               # control-plane reference (gitignored)
+├── openshorts/            # all-in-one reference (gitignored)
+├── moneyprinterturbo/     # stock+TTS base (gitignored)
+├── opennolan/             # agentic editor patterns (gitignored)
+├── open-ai-ugc/           # generative actor front end (gitignored)
+├── atlas-marketing-studio/ # reference-structure patterns (gitignored)
+├── taisly-agent/          # publishing primitive (gitignored)
+├── jev-ultrafast/         # Jev architecture reference (gitignored)
+├── typesafe-jev-examples/ # Jev wire format reference (gitignored)
+├── typesafe-ai-playground/ # Jev provider abstraction (gitignored)
+├── awesome-jev/           # Jev pattern directory (gitignored)
+├── awesome-jev-by-typesafe/ # Jev use cases (gitignored)
+├── supertonic-tts/        # local TTS reference (gitignored)
+├── voicestudio/           # multi-engine TTS reference (gitignored)
+├── pocket-tts/            # voice cloning reference (gitignored)
+└── ccvideo/               # restrained visual aesthetic reference (gitignored)
 ```
 
-Result: 1080x1920 h264 + aac, 16.3s, 414KB, 5 gradient-fallback clips
-+ Edge TTS + word-level subs. Proof: `experiments_001_zero_baseline.mp4`.
-$0 because --script skips LLM and no FAL key means gradient fallback.
+## Tokens / keys
 
-Next $0 steps: Groq free key for topic->script, Openverse/Wikimedia stock
-fill via clipforge-commerce, MoneyPrinterTurbo stock+EdgeTTS path,
-Taisly publish dry-run. Then A/B hook/caption/BGM variants, then
-paid visuals only where attention delta justifies cost.
+| Service | Where | Purpose |
+|---------|-------|---------|
+| OpenRouter | `main` vault (OPENROUTER_API_KEY) | Jev decisions only |
+| OpenCode Go | `~/.local/share/opencode/auth.json` | pi thinking + content MCP |
+| HF | `main` vault (HF_TOKEN) | Kaggle Stable Audio (pending) |
+| Kaggle | `main` vault (KAGGLE_API_TOKEN) | GPU renders (pending) |
 
-## MCP: content-sensor (V1, verified end to end)
-
-`mcp_server.py` — stdlib only, same stdio shape as datagarden servers.
-Nine tools implementing `docs/deterministic-view-spec.md`:
-`signals_top` (powpowpow | ukgraph, scored by interestingness,
-worthiness-gated) → `expand_signal` (seed → supporting neighbourhood)
-→ `content_from_signal` (CHANGE|WHY|WHERE|COMPARE|OPPORTUNITY|WARNING
-→ hook/claim/proof/close/source_ids manifest) → `render_video`
-(HyperFrames 9:16 MP4, lineage logged) + `render_narration` ($0 Edge
-TTS) + `build_content`, `list_templates`, `content_status`, `lineage`.
-
-Sanity gates are load-bearing: expansion caught KAS rig figures at
-$3.3B/day in the source cards — absurd rigs are excluded with notes,
-not rendered.
-
-## Influence kernel (`docs/influence-dependency-graph-spec.md`)
-
-`core/` ports the kernel: Proof (no metrics+evidence, no proof),
-propose-only ProcessorSpec with forbidden keys, Artifact with
-traversable chain, hash-chained receipts with FAIL first-class, and
-three gates (`evidence-fresh`, `no-duplicate`, `claim-resolved`).
-`registry/` declares what each cloned repo provides; `channels/`
-holds ukgraph/powpowpow profiles; `templates/` maps to the registry.
-
-Surface is now 18 tools: the 11 engines plus `ingest → compile →
-render → publish → measure → run → inspect`. `run` does signal to
-finished post with receipts at every edge; duplicate renders FAIL at
-compile; `inspect receipts` verifies the chain.
-
-## Jev selection layer (`docs/jev-signal-router-spec.md`)
-
-`route_signal` / `rank_signals`: provider-neutral Jev verdicts
-(interest / frame / monetary / template) over deterministic candidates.
-OpenRouter Decisions endpoint now (`typesafe/jev-1.13`), TypeSafe direct
-later — one interface, origin always reported. No key configured, so the
-MCP runs deterministic fallback honestly marked; 401 path tested to fall
-back cleanly. Reference repos cloned: `jev-ultrafast`,
-`typesafe-jev-examples`, `typesafe-ai-playground`, both awesome lists.
-
-```bash
-python3 mcp_server.py --serve   # MCP stdio for agents
-```
-
-Verified 2026-09-19: PRL unprofitability signal → content → narration
-(177KB) → 9:16 MP4 → `signal_id → video_id` in store/lineage.jsonl.
-Publishing still manual. Brand SFX kit pending (Stable Audio recipes).
-
-## Experiment protocol (the proprietary bit)
-
-hypothesis -> experiment def (hook variants x format) -> generate ->
-publish -> observe (retention, CTR, comments, follows) -> update
-content priors + format genotypes. Everything pixel-related stays
-replaceable.
+Dash token hardcoded in `static/index.html` for zero-paste access.
