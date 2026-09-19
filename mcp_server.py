@@ -1348,7 +1348,7 @@ def content_status():
 
 
 def lineage(limit=20):
-    """signal_id -> video_id attachment log."""
+    """signal_id -> video_id attachment log. Latest per content_id only."""
     if not LINEAGE.exists():
         return {"status": "ok", "entries": []}
     rows = [json.loads(l) for l in LINEAGE.read_text().splitlines() if l.strip()]
@@ -1356,7 +1356,13 @@ def lineage(limit=20):
         limit = max(1, min(int(limit), 100))
     except (TypeError, ValueError):
         limit = 20
-    return {"status": "ok", "entries": rows[-limit:]}
+    seen = {}
+    for r in rows:
+        cid = r.get("content_id", "")
+        if cid:
+            seen[cid] = r
+    deduped = list(seen.values())
+    return {"status": "ok", "entries": deduped[-limit:]}
 
 
 PROOFS_DIR = STORE / "proofs"
