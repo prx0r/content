@@ -928,9 +928,12 @@ def _router_questions(signal):
         "interest": {
             "type": "score",
             "instructions": ("How materially interesting is this signal as a 20-second "
-                             "evidence-driven video? 0 = routine graph update, "
-                             "10 = must-cover economic change."),
-            "min": 0, "max": 10,
+                             "evidence-driven video?"),
+            "criteria": [
+                "Routine graph update; no surprise, no money on the line.",
+                "Notable change worth a mention alongside bigger stories.",
+                "Must-cover economic change; surprising and actionable.",
+            ],
         },
         "frame": {
             "type": "choice",
@@ -1002,31 +1005,39 @@ def _deterministic_verdict(signal):
 
 
 def _parse_jev_answers(raw):
-    """Defensively extract verdict fields from a System One response body."""
+    """Extract verdict fields. Live shape: {answers: {q: {type,...}}}.
+    Score rubrics return 0..N (N = len(criteria)-1); normalized to 0-10."""
     out = {"interest": None, "frame": None, "monetary": None,
            "template": None, "probabilities": {}}
     if not isinstance(raw, dict):
         return out
-    scores = raw.get("scores", {}) or {}
-    if isinstance(scores.get("interest"), dict):
-        out["interest"] = scores["interest"].get("score")
-    elif isinstance(scores.get("interest"), (int, float)):
-        out["interest"] = scores["interest"]
-    choices = raw.get("choices", {}) or {}
+    ans = raw.get("answers", raw) or {}
+    if not isinstance(ans, dict):
+        return out
+    iq = ans.get("interest", {}) or {}
+    if isinstance(iq.get("score"), (int, float)):
+        try:
+            top = max(int(k) for k in (iq.get("legend") or {"2": 0}))
+        except (ValueError, TypeError):
+            top = 2
+        out["interest"] = round(iq["score"] / max(top, 1) * 10, 1)
+        if iq.get("probabilities"):
+            out["probabilities"]["interest"] = iq["probabilities"]
     for key in ("frame", "template"):
-        c = choices.get(key)
+        c = ans.get(key, {}) or {}
         if isinstance(c, dict):
-            out["frame" if key == "frame" else "template"] = c.get("choice")
+            if c.get("choice") in (FRAME_CHOICES if key == "frame" else TEMPLATE_CHOICES):
+                out[key] = c["choice"]
             if c.get("probabilities"):
                 out["probabilities"][key] = c["probabilities"]
         elif isinstance(c, str):
             out[key] = c
-    nouls = raw.get("nouls", {}) or {}
-    m = nouls.get("monetary")
+    m = ans.get("monetary", {}) or {}
     if isinstance(m, dict):
-        out["monetary"] = m.get("noul")
-        if out["monetary"] is None and m.get("probability") is not None:
-            out["monetary"] = m["probability"] > 0.5
+        p = m.get("noul", m.get("probability"))
+        if isinstance(p, (int, float)):
+            out["monetary"] = p > 0.5
+            out["probabilities"]["monetary_p"] = p
     elif isinstance(m, bool):
         out["monetary"] = m
     return out
