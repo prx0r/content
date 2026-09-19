@@ -1,0 +1,16 @@
+# PowPowPow channel — machine-resource economics probe.
+name: powpowpow
+garden: powpowpow
+role: resources-forest
+job: "publish point-in-time physical economics of mineable/compute crypto: who supplies, what they earn, how absorption holds"
+detects:
+  - miner unprofitability anomalies
+  - cross-asset profitability ranking
+  - absorption stress
+  - subsidy per compute
+module: clean_signal_short
+probe_tags: [theme, possible_child, audience, desire, friction]
+brand:
+  bg: "#050505"
+  fg: "#f7f7f5"
+  accent: "#ffb224"

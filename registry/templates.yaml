@@ -1,0 +1,44 @@
+# Template registry — canonical recipe definitions.
+templates:
+  anomaly:
+    id: signal_anomaly_v1
+    accepts: [anomaly]
+    requires: [metric, evidence]
+    scenes: [hook, hero_metric, evidence, implication, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  ranking:
+    id: signal_ranking_v1
+    accepts: [ranking]
+    requires: [ordered_metrics, evidence]
+    scenes: [hook, winner, list, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  vs:
+    id: signal_vs_v1
+    accepts: [comparison]
+    requires: [metric_a, metric_b, evidence]
+    scenes: [hook, side_a, side_b, verdict, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  what_changed:
+    id: signal_change_v1
+    accepts: [change]
+    requires: [before, after, evidence]
+    scenes: [hook, before, after, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  map:
+    id: signal_map_v1
+    accepts: [geo_signal]
+    requires: [place, metric, evidence]
+    scenes: [hook, map_focus, metric, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  why:
+    id: signal_causal_v1
+    accepts: [causal]
+    requires: [claim, mechanism, evidence]
+    scenes: [hook, claim, mechanism, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]
+  opportunity:
+    id: signal_opportunity_v1
+    accepts: [anomaly, ranking, geo_signal]
+    requires: [claim, proof_facts, evidence]
+    scenes: [hook, claim, proof, close, source]
+    capabilities: [voice.tts, visual.metric, render.vertical]

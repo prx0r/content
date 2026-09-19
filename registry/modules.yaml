@@ -1,0 +1,25 @@
+# Modules — reusable compositions of processors.
+modules:
+  clean_signal_short:
+    description: "Evidence-driven vertical short, motion-graphics style"
+    requires: [judge.rank, script, voice.tts, render.vertical]
+    default_route: [jev.rank, script.short, voice.tts, render.hyperframes]
+    status: live
+
+  narrated_chart_short:
+    description: "Signal short with narrated chart scene"
+    requires: [judge.rank, script, voice.tts, visual.chart, render.vertical]
+    default_route: [jev.rank, script.short, voice.tts, chart.svg, render.hyperframes]
+    status: partial
+
+  avatar_explainer:
+    description: "Presenter-led explainer with captions"
+    requires: [judge.rank, script, voice.tts, avatar.video, captions, render.vertical]
+    default_route: [jev.rank, script.short, voice.tts, render.socheli]
+    status: registry-only
+
+  ugc_commerce:
+    description: "Product commerce short from a listing"
+    requires: [script, voice.tts, render.vertical, publish.tiktok]
+    default_route: [script.short, voice.tts, render.clipforge, publish.taisly]
+    status: registry-only

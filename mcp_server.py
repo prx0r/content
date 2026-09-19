@@ -317,9 +317,8 @@ def content_from_signal(signal_id=None, query="CHANGE"):
     if seed.get("metrics"):
         m = seed["metrics"][0]
         proof.append(f"{m['name']}: {m['value']} {m.get('unit', '')}".strip())
-    for s in supporting[:3]:
-        if s.get("claim"):
-            proof.append(s["claim"])
+    supporting_claims = [s["claim"] for s in supporting[:3] if s.get("claim")]
+    proof.extend(supporting_claims)
     proof = proof[:4]
     close = seed.get("why", "")
     beats = [seed.get("claim", "")] + proof[1:3]
@@ -335,6 +334,7 @@ def content_from_signal(signal_id=None, query="CHANGE"):
         "close": close,
         "source_ids": [seed["id"]] + [s["id"] for s in supporting],
         "beats": beats[:4],
+        "supporting_claims": supporting_claims,
         "source_label": f"{seed.get('entities', ['garden'])[0]} · Sep 2026",
         "metrics": seed.get("metrics", []),
         "evidence": seed.get("evidence", []),
@@ -746,6 +746,165 @@ def lineage(limit=20):
     return {"status": "ok", "entries": rows[-limit:]}
 
 
+PROOFS_DIR = STORE / "proofs"
+PROOFS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_proof(proof_id):
+    p = PROOFS_DIR / f"{proof_id}.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
+def ingest(signal_id=None):
+    """Anything -> ContentSource. Accepts a signal_id, stores a Proof."""
+    from core import proof_from_signal, append_receipt
+    if not signal_id:
+        return {"status": "error", "reason": "Pass signal_id from signals_top."}
+    seed = next((s for s in _all_signals() if s["id"] == signal_id), None)
+    if not seed:
+        return {"status": "error", "reason": f"Unknown signal_id '{signal_id}'."}
+    try:
+        proof = proof_from_signal(seed, seed.get("garden", ""))
+    except ValueError as e:
+        return {"status": "error", "reason": str(e)}
+    (PROOFS_DIR / f"{proof.proof_id}.json").write_text(json.dumps(
+        {**proof.to_dict(), "signal_id": seed["id"],
+         "garden": seed.get("garden", "")}, indent=2))
+    rcpt = append_receipt("ingest", {"proof_id": proof.proof_id,
+                                     "signal_id": seed["id"]})
+    return {"status": "ok", "proof": proof.to_dict(), "signal_id": seed["id"],
+            "garden": seed.get("garden", ""), "receipt_id": rcpt["receipt_id"]}
+
+
+def compile(proof_id=None, query="OPPORTUNITY"):
+    """Proof + channel + objective -> ContentSpec (gated)."""
+    from core import append_receipt, run_gates
+    if not proof_id:
+        return {"status": "error", "reason": "Pass proof_id from ingest."}
+    stored = _load_proof(proof_id)
+    if not stored:
+        return {"status": "error", "reason": f"Unknown proof_id '{proof_id}'."}
+    res = content_from_signal(stored["signal_id"], query)
+    if res.get("status") != "ok":
+        return res
+    content = res["content"]
+    from core import Proof
+    proof = Proof(proof_id=stored["proof_id"], kind=stored["kind"],
+                  source=stored["source"], subject=stored["subject"],
+                  claims=stored["claims"], evidence_refs=stored["evidence_refs"],
+                  observed_at=stored["observed_at"])
+    gates = run_gates(proof, stored["signal_id"], content["template"], content)
+    rcpt = append_receipt("compile", {"proof_id": proof_id,
+                                      "content_id": res["content_id"],
+                                      "template": content["template"],
+                                      "gates": gates["gates"]},
+                          status="ok" if gates["passed"] else "FAIL",
+                          detail="" if gates["passed"] else "gates failed")
+    return {**res, "gates": gates,
+            "compile_receipt_id": rcpt["receipt_id"]}
+
+
+def render(content_id=None):
+    """ContentSpec -> artifact via the dependency graph (gated)."""
+    from core import append_receipt, Artifact
+    if not content_id:
+        return {"status": "error", "reason": "Pass content_id from compile."}
+    src = STORE / f"{content_id}.json"
+    if not src.exists():
+        return {"status": "error", "reason": f"Unknown content_id '{content_id}'."}
+    content = json.loads(src.read_text())
+    res = render_video(content_id)
+    if res.get("status") != "ok":
+        append_receipt("render", {"content_id": content_id}, status="FAIL",
+                       detail=res.get("reason", "")[:200])
+        return res
+    art = Artifact(artifact_id=res["video_id"], kind="video", path=res["mp4"],
+                   proof_id="", signal_id=res.get("signal_id", ""),
+                   processors={"render": "render.hyperframes",
+                               "voice": "voice.edge_tts"})
+    rcpt = append_receipt("render", {"content_id": content_id,
+                                     "video_id": res["video_id"],
+                                     "signal_id": res.get("signal_id"),
+                                     "template": content.get("template"),
+                                     "artifact": art.to_dict()})
+    return {**res, "artifact": art.to_dict(), "render_receipt_id": rcpt["receipt_id"]}
+
+
+def publish(video_id=None, platform="youtube"):
+    """Platform adapters. Manual until Taisly is wired — receipt says so."""
+    from core import append_receipt
+    if not video_id:
+        return {"status": "error", "reason": "Pass video_id from render."}
+    rcpt = append_receipt("publish", {"video_id": video_id, "platform": platform},
+                          status="manual-pending",
+                          detail="No uploader wired. Upload manually, then measure().")
+    return {"status": "manual-pending", "video_id": video_id,
+            "platform": platform,
+            "instruction": "Upload the MP4 manually, then call measure().",
+            "publish_receipt_id": rcpt["receipt_id"]}
+
+
+def measure(video_id=None, metrics=None):
+    """Performance observation back into the receipt chain."""
+    from core import append_receipt
+    if not video_id:
+        return {"status": "error", "reason": "Pass video_id from render."}
+    metrics = metrics or {}
+    rcpt = append_receipt("measure", {"video_id": video_id, "metrics": metrics})
+    return {"status": "ok", "video_id": video_id,
+            "receipt_id": rcpt["receipt_id"]}
+
+
+def run(signal_id=None, query="OPPORTUNITY"):
+    """Convenience: signal -> finished post (ingest/compile/render/narrate)."""
+    ing = ingest(signal_id)
+    if ing.get("status") != "ok":
+        return ing
+    comp = compile(ing["proof"]["proof_id"], query)
+    if comp.get("status") != "ok":
+        return comp
+    if not comp.get("gates", {}).get("passed"):
+        return {"status": "FAIL", "stage": "compile", "gates": comp["gates"],
+                "compile_receipt_id": comp.get("compile_receipt_id")}
+    rnd = render(comp["content_id"])
+    if rnd.get("status") != "ok":
+        return {"status": "FAIL", "stage": "render", **rnd}
+    nar = render_narration(comp["content_id"])
+    return {"status": "ok", "signal_id": signal_id, "query": query,
+            "proof_id": ing["proof"]["proof_id"],
+            "content_id": comp["content_id"], "video_id": rnd["video_id"],
+            "mp4": rnd["mp4"], "narration": nar.get("audio"),
+            "receipts": {"ingest": ing["receipt_id"],
+                         "compile": comp["compile_receipt_id"],
+                         "render": rnd["render_receipt_id"]}}
+
+
+def inspect(target="graph"):
+    """Show graph, processors, costs, artifacts, receipts, proofs."""
+    from core import verify_chain
+    import yaml
+    target = (target or "graph").lower()
+    if target == "graph":
+        procs = yaml.safe_load((ROOT / "registry" / "processors.yaml").read_text())
+        mods = yaml.safe_load((ROOT / "registry" / "modules.yaml").read_text())
+        tmpls = yaml.safe_load((ROOT / "registry" / "templates.yaml").read_text())
+        return {"status": "ok", "processors": procs, "modules": mods,
+                "templates": tmpls}
+    if target == "receipts":
+        return {"status": "ok", **verify_chain()}
+    if target == "proofs":
+        return {"status": "ok",
+                "proofs": [json.loads(p.read_text()) for p in sorted(PROOFS_DIR.glob("*.json"))]}
+    if target.startswith("proof:"):
+        stored = _load_proof(target.split(":", 1)[1])
+        return {"status": "ok", "proof": stored} if stored else {
+            "status": "error", "reason": "unknown proof"}
+    return {"status": "error",
+            "reason": "Use graph | receipts | proofs | proof:<id>."}
+
+
 TOOLS = [
     {"name": "signals_top",
      "description": "Top deterministic signals for a garden (powpowpow | ukgraph). Evidence-linked, no invented metrics.",
@@ -801,6 +960,44 @@ TOOLS = [
      "description": "signal_id -> video_id attachment log.",
      "inputSchema": {"type": "object",
                      "properties": {"limit": {"type": "integer"}}}},
+    {"name": "ingest",
+     "description": "Anything -> ContentSource. Signal ID in, stored Proof out. No proof without metrics+evidence.",
+     "inputSchema": {"type": "object",
+                     "properties": {"signal_id": {"type": "string"}},
+                     "required": ["signal_id"]}},
+    {"name": "compile",
+     "description": "Proof + objective -> ContentSpec. Runs evidence-fresh, no-duplicate, claim-resolved gates.",
+     "inputSchema": {"type": "object",
+                     "properties": {"proof_id": {"type": "string"},
+                                    "query": {"type": "string"}},
+                     "required": ["proof_id"]}},
+    {"name": "render",
+     "description": "ContentSpec -> video artifact via the dependency graph. Gate failures become FAIL receipts.",
+     "inputSchema": {"type": "object",
+                     "properties": {"content_id": {"type": "string"}},
+                     "required": ["content_id"]}},
+    {"name": "publish",
+     "description": "Platform adapters. Manual until an uploader is wired; receipt says manual-pending.",
+     "inputSchema": {"type": "object",
+                     "properties": {"video_id": {"type": "string"},
+                                    "platform": {"type": "string"}},
+                     "required": ["video_id"]}},
+    {"name": "measure",
+     "description": "Performance observation back into the receipt chain.",
+     "inputSchema": {"type": "object",
+                     "properties": {"video_id": {"type": "string"},
+                                    "metrics": {"type": "object"}},
+                     "required": ["video_id"]}},
+    {"name": "run",
+     "description": "Convenience: signal -> finished post (ingest/compile/render/narrate with receipts).",
+     "inputSchema": {"type": "object",
+                     "properties": {"signal_id": {"type": "string"},
+                                    "query": {"type": "string"}},
+                     "required": ["signal_id"]}},
+    {"name": "inspect",
+     "description": "Show dependency graph, receipts chain, proofs, or one proof (graph|receipts|proofs|proof:<id>).",
+     "inputSchema": {"type": "object",
+                     "properties": {"target": {"type": "string"}}}},
 ]
 
 DISPATCH = {t["name"]: globals()[t["name"]] for t in TOOLS}

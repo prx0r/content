@@ -71,6 +71,20 @@ Sanity gates are load-bearing: expansion caught KAS rig figures at
 $3.3B/day in the source cards — absurd rigs are excluded with notes,
 not rendered.
 
+## Influence kernel (`docs/influence-dependency-graph-spec.md`)
+
+`core/` ports the kernel: Proof (no metrics+evidence, no proof),
+propose-only ProcessorSpec with forbidden keys, Artifact with
+traversable chain, hash-chained receipts with FAIL first-class, and
+three gates (`evidence-fresh`, `no-duplicate`, `claim-resolved`).
+`registry/` declares what each cloned repo provides; `channels/`
+holds ukgraph/powpowpow profiles; `templates/` maps to the registry.
+
+Surface is now 18 tools: the 11 engines plus `ingest → compile →
+render → publish → measure → run → inspect`. `run` does signal to
+finished post with receipts at every edge; duplicate renders FAIL at
+compile; `inspect receipts` verifies the chain.
+
 ## Jev selection layer (`docs/jev-signal-router-spec.md`)
 
 `route_signal` / `rank_signals`: provider-neutral Jev verdicts

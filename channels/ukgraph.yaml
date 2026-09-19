@@ -1,0 +1,20 @@
+# UKGraph channel — broad UK economic probe (the trunk).
+name: ukgraph
+garden: ukgraph
+role: trunk
+job: "detect where the UK economy is under stress or changing shape; publish clean evidence-driven observations"
+detects:
+  - occupations under pressure
+  - wages moving
+  - vacancies rising/falling
+  - regional mismatch
+  - training bottlenecks
+  - business formation changes
+  - price/capacity stress
+module: clean_signal_short
+probe_tags: [theme, possible_child, audience, desire, friction, agi_stressor]
+children_when_justified: [uk_opportunities, uk_retrain, uk_business, uk_resell, uk_boring]
+brand:
+  bg: "#050505"
+  fg: "#f7f7f5"
+  accent: "#ffb224"

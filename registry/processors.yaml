@@ -1,0 +1,75 @@
+# Capability registry — what each cloned repo provides.
+# Resolution selects the graph; optimize later (cheapest/fastest/local-only)
+# without changing the pipeline.
+processors:
+  hyperframes:
+    provides: [render.vertical, render.html_video, animation.svg, captions.render]
+    cost: local
+    quality: premium
+    deterministic: true
+    status: live
+    adapter: processors/hyperframes
+
+  clipforge_zero:
+    provides: [render.vertical, voice.tts, captions.render]
+    cost: zero
+    quality: scratch
+    deterministic: false
+    status: live
+    adapter: processors/clipforge
+
+  jev:
+    provides: [judge.choice, judge.score, judge.rank]
+    cost: metered
+    quality: premium
+    deterministic: false
+    status: live-fallback
+    adapter: processors/jev
+
+  supertonic:
+    provides: [voice.tts]
+    cost: local
+    quality: premium
+    deterministic: true
+    status: stub
+    adapter: processors/voice
+
+  voicestudio:
+    provides: [voice.tts, voice.clone]
+    cost: local
+    quality: premium
+    deterministic: true
+    status: stub
+    adapter: processors/voice
+
+  stable_audio:
+    provides: [audio.sfx, audio.bed, audio.sting]
+    cost: kaggle-gpu
+    quality: premium
+    deterministic: false
+    status: stub
+    adapter: processors/audio
+
+  socheli:
+    provides: [script, storyboard, render.vertical, publish.youtube, publish.instagram, publish.tiktok]
+    cost: metered
+    quality: premium
+    deterministic: false
+    status: registry-only
+    adapter: processors/socheli
+
+  openshorts:
+    provides: [clip.long_to_short, captions, dubbing, publish.youtube, publish.instagram, publish.tiktok]
+    cost: metered
+    quality: standard
+    deterministic: false
+    status: registry-only
+    adapter: processors/openshorts
+
+  taisly:
+    provides: [publish.youtube, publish.instagram, publish.tiktok, publish.x, publish.facebook]
+    cost: free-client
+    quality: standard
+    deterministic: true
+    status: registry-only
+    adapter: processors/publish
